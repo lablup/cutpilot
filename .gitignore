@@ -2,6 +2,7 @@
 sources/
 work/
 outputs/
+models/
 
 # Secrets / local env
 .env
