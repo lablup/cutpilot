@@ -17,6 +17,75 @@ async def _run(args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg failed ({proc.returncode}): {stderr.decode(errors='replace')}")
 
 
+async def probe_duration(source: Path) -> float:
+    """Return the video's total duration in seconds via `ffprobe`."""
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(source),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffprobe failed ({proc.returncode}): {stderr.decode(errors='replace')}")
+    return float(stdout.decode().strip())
+
+
+async def prepare_video_for_vl(source: Path, output: Path, height: int = 480, crf: int = 30) -> None:
+    """Transcode the source to a compact muxed mp4 suitable for base64 inlining in a VL call.
+
+    The Nemotron VL NIM samples frames server-side, so we just need *a* video
+    small enough to fit in one HTTP POST after base64 encoding. Defaults produce
+    roughly 30–60 MB for a 45-minute source — tune `crf` up or `height` down
+    if the NIM rejects the payload.
+
+    Drops audio (`-an`) since the VL NIM ignores it.
+    """
+    output.parent.mkdir(parents=True, exist_ok=True)
+    await _run([
+        "-i", str(source),
+        "-an",
+        "-vf", f"scale=-2:{height}",
+        "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        str(output),
+    ])
+
+
+async def extract_frames(
+    source: Path,
+    out_dir: Path,
+    fps_target: float,
+    max_frames: int,
+) -> list[tuple[float, Path]]:
+    """Extract uniformly-sampled JPEG frames spanning the full video.
+
+    The effective sampling rate is chosen so the output is exactly N frames
+    evenly distributed across `[0, duration]`, where N is capped at `max_frames`.
+
+    Returns: list of `(timestamp_seconds, jpeg_path)` tuples in playback order.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    duration = await probe_duration(source)
+    n_frames = max(8, min(max_frames, int(duration * fps_target)))
+    effective_fps = n_frames / duration
+    await _run([
+        "-i", str(source),
+        "-vf", f"fps={effective_fps}",
+        "-frames:v", str(n_frames),
+        "-q:v", "3",
+        str(out_dir / "frame_%06d.jpg"),
+    ])
+    return [
+        ((i - 0.5) / effective_fps, out_dir / f"frame_{i:06d}.jpg")
+        for i in range(1, n_frames + 1)
+        if (out_dir / f"frame_{i:06d}.jpg").exists()
+    ]
+
+
 async def extract_audio(source: Path, output: Path) -> None:
     """Demux audio to 16 kHz mono WAV — the rate Whisper expects."""
     output.parent.mkdir(parents=True, exist_ok=True)
