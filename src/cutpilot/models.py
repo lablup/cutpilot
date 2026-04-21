@@ -81,6 +81,21 @@ class CandidatesResult(BaseModel):
     candidates: list[Candidate] = Field(min_length=5, max_length=10)
 
 
+class ProbeInfo(BaseModel):
+    """Narrow view of ffprobe output. Fields are optional because ffprobe's JSON
+    shape varies across container formats — every value may be missing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    duration: float | None = None
+    width: int | None = None
+    height: int | None = None
+    video_codec: str | None = None
+    audio_codec: str | None = None
+    fps: float | None = None
+    size_bytes: int | None = None
+
+
 class ClipManifest(BaseModel):
     """Per-clip sidecar JSON. Emitted by the Editor step after ffmpeg materialization."""
 
