@@ -81,6 +81,10 @@ cutpilot_cut = "cutpilot.tools.cut:register"
 cutpilot_crop_9_16 = "cutpilot.tools.crop:register"
 cutpilot_burn_captions = "cutpilot.tools.captions:register"
 cutpilot_transcript_window = "cutpilot.tools.transcript_window:register"
+cutpilot_splice = "cutpilot.tools.splice:register"
+cutpilot_merge = "cutpilot.tools.merge:register"
+cutpilot_save = "cutpilot.tools.save:register"
+cutpilot_probe = "cutpilot.tools.probe:register"
 
 # ---------------------------------------------------------------------------
 # Build configuration

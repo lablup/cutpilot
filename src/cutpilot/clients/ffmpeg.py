@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import tempfile
 from pathlib import Path
+from typing import Any
+
+from cutpilot.models import ProbeInfo
 
 
 async def _run(args: list[str]) -> None:
@@ -146,3 +151,147 @@ async def burn_captions(source: Path, subtitle_file: Path, output: Path) -> None
         "-c:a", "copy",
         str(output),
     ])
+
+
+# ---------------------------------------------------------------------------
+# Splice (concat demuxer), merge (mux A/V), save (standard export), probe.
+# ---------------------------------------------------------------------------
+
+
+def _format_concat_listfile(sources: list[Path]) -> str:
+    """Render a concat-demuxer listfile.
+
+    Each line is `file '<absolute path>'`. Single quotes inside paths are
+    escaped per ffmpeg's concat rules (`'` → `'\\''`).
+    """
+    lines = [f"file '{str(src.resolve()).replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'" for src in sources]
+    return "\n".join(lines) + "\n"
+
+
+async def _run_concat(sources: list[Path], extra_args: list[str], output: Path) -> None:
+    """Write a temp concat listfile, invoke ffmpeg, clean up.
+
+    `extra_args` is spliced between the `-i listfile` and the output path, so
+    callers control codec flags without re-implementing the listfile dance.
+    """
+    output.parent.mkdir(parents=True, exist_ok=True)
+    text = _format_concat_listfile(sources)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        f.write(text)
+        listfile_path = Path(f.name)
+    try:
+        await _run([
+            "-f", "concat", "-safe", "0",
+            "-i", str(listfile_path),
+            *extra_args,
+            str(output),
+        ])
+    finally:
+        listfile_path.unlink(missing_ok=True)
+
+
+async def concat_copy(sources: list[Path], output: Path) -> None:
+    """Splice clips end-to-end with `-c copy` (concat demuxer). Fast but needs
+    matching codec/timebase/resolution — callers should fall back to
+    `concat_reencode` on RuntimeError."""
+    await _run_concat(sources, ["-c", "copy"], output)
+
+
+async def concat_reencode(sources: list[Path], output: Path) -> None:
+    """Splice clips end-to-end with re-encode. Works across codec mismatches."""
+    await _run_concat(
+        sources,
+        ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac", "-b:a", "128k"],
+        output,
+    )
+
+
+async def mux_av(video: Path, audio: Path, output: Path) -> None:
+    """Combine a video-only and audio-only source into one MP4 with `-c copy`.
+
+    Pins exactly one video + one audio stream via explicit `-map`, and uses
+    `-shortest` so mismatched durations truncate to the shorter track instead
+    of padding silently.
+    """
+    output.parent.mkdir(parents=True, exist_ok=True)
+    await _run([
+        "-i", str(video),
+        "-i", str(audio),
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-shortest",
+        "-c", "copy",
+        str(output),
+    ])
+
+
+async def export_standard(source: Path, output: Path) -> None:
+    """Final re-encode to a shareable MP4: libx264 preset=fast CRF=20, AAC 128k, +faststart."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    await _run([
+        "-i", str(source),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(output),
+    ])
+
+
+async def _run_probe(args: list[str]) -> str:
+    """Invoke `ffprobe -v error <args>` and return stdout."""
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe", "-v", "error", *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffprobe failed ({proc.returncode}): {stderr.decode(errors='replace')}")
+    return stdout.decode()
+
+
+def _narrow_probe(raw: dict[str, Any]) -> ProbeInfo:
+    """Narrow full ffprobe JSON to the seven fields CutPilot cares about.
+
+    Pure function so it's unit-testable with a canned dict and does not depend
+    on `ffprobe` being installed.
+    """
+    fmt: dict[str, Any] = raw.get("format") or {}
+    streams: list[dict[str, Any]] = raw.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"), None) or {}
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None) or {}
+
+    fps: float | None = None
+    r_frame_rate = video.get("r_frame_rate")
+    if isinstance(r_frame_rate, str) and "/" in r_frame_rate:
+        num_str, _, den_str = r_frame_rate.partition("/")
+        try:
+            num, den = float(num_str), float(den_str)
+            fps = num / den if den else None
+        except ValueError:
+            fps = None
+
+    duration = fmt.get("duration")
+    width = video.get("width")
+    height = video.get("height")
+    size = fmt.get("size")
+
+    return ProbeInfo(
+        duration=float(duration) if duration is not None else None,
+        width=int(width) if width is not None else None,
+        height=int(height) if height is not None else None,
+        video_codec=video.get("codec_name"),
+        audio_codec=audio.get("codec_name"),
+        fps=fps,
+        size_bytes=int(size) if size is not None else None,
+    )
+
+
+async def probe_media(source: Path) -> ProbeInfo:
+    """Inspect a media file via `ffprobe -show_streams -show_format -print_format json`."""
+    stdout = await _run_probe([
+        "-show_streams", "-show_format",
+        "-print_format", "json",
+        str(source),
+    ])
+    return _narrow_probe(json.loads(stdout))
