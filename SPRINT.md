@@ -20,11 +20,18 @@ Dev A and Dev B work on parallel tracks. They sync at hours 1, 6, 10, and 11.
 
 ## Architecture (simplified from PRD)
 
-Stack: **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`, CLI `nat`) orchestrates a two-step workflow declared in `configs/cutpilot.yml`. Both steps hit the same Nemotron Nano 2 VL served by **NVIDIA NIM** (self-hosted container on an **NVIDIA Brev** H100 Launchable by default; hosted NIM at `build.nvidia.com` as fallback).
+Stack: **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`, CLI `nat`) orchestrates a two-step workflow declared in `src/cutpilot/configs/cutpilot.yml`. Three NIM services run on a single **NVIDIA Brev** H100 Launchable:
 
-- **Scout** — NAT `@register_function` that reads video + transcript in one pass and returns a `CandidatesResult` with 5–10 candidate moments and self-scored rubric (hook, self-contained, length-fit, visual-fit, 1–5 each). No tools. No separate critic.
-- **Editor** — NAT `tool_calling_agent` that takes top 3 by composite score, validates timestamps against transcript, calls tools to cut/crop/caption.
-- **Orchestrator** — NAT `sequential_executor` composing `[scout, editor]`. Runs via `nat run --config_file=configs/cutpilot.yml` (or the `cutpilot` CLI).
+| Port | Service | Purpose |
+|---|---|---|
+| `8100` | Riva Whisper-Large (gRPC) | Audio transcription (pipeline stage, not a NAT tool) |
+| `8000` | NIM Nemotron-3 Nano 30B A3B | Editor — text reasoning + tool calling |
+| `9000` | NIM Nemotron Nano 12B V2 VL | Scout — whole-video + frame analysis |
+
+- **Scout** — NAT `@register_function` that reads video + transcript in one pass against the VL NIM and returns a `CandidatesResult` with 5–10 candidate moments and self-scored rubric (hook, self-contained, length-fit, visual-fit, 1–5 each). No tools. No separate critic.
+- **Editor** — NAT `tool_calling_agent` wired to the text NIM. Takes top 3 by composite score, validates timestamps against transcript, calls tools to cut/crop/caption.
+- **Orchestrator** — NAT `sequential_executor` composing `[scout, editor]`. Runs via `nat run --config_file=src/cutpilot/configs/cutpilot.yml` (or the `cutpilot` CLI).
+- Tools decorated `framework_wrappers=[LLMFrameworkEnum.ADK]` so they're portable to NAT's `_type: adk` workflow if we ever switch; focus stays on NAT.
 
 Four tools available to Editor only, each registered via `@register_function`: `cut`, `crop_9_16_center`, `burn_captions`, `get_transcript_window`.
 
@@ -49,11 +56,14 @@ Explicitly deferred to post-hackathon. Do not build these.
 ### Hour 0–1: Setup and sync
 
 **Both devs together.**
-- Provision the Brev H100 Launchable and confirm SSH access. *Verify:* `nvidia-smi` on the instance shows a free H100, `brev ls` lists the instance, ports 8000 (NIM) and 8001 (dev server) are reachable from the laptop via `brev port-forward`.
-- Set env: `NGC_API_KEY` (pulls the NIM container), `NVIDIA_API_KEY` (hosted-NIM fallback), `NIM_BASE_URL` (defaults to `http://localhost:8000/v1` on the instance). *Verify:* all three exported, `.env` on the instance mirrors `.env.example`.
-- Launch the NIM container on Brev: `docker run --gpus all -p 8000:8000 -e NGC_API_KEY nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>`. *Verify:* `curl $NIM_BASE_URL/models` returns `nvidia/nemotron-nano-12b-v2-vl`; a chat-completion request with a test video URL returns a non-empty response.
-- Start Whisper (faster-whisper large-v3) on the same node. *Verify:* a 10s audio fixture transcribes in under 5s with word-level timestamps.
-- Install NeMo Agent Toolkit: `pip install 'nvidia-nat[langchain,mcp]'`. *Verify:* `nat --help` lists `run`, `serve`, `mcp`; `from nat.cli.register_workflow import register_function` imports.
+- Provision the Brev H100 Launchable and confirm SSH access. *Verify:* `nvidia-smi` on the instance shows a free H100, `brev ls` lists the instance, ports `8000` (text NIM), `9000` (VL NIM), and `8100` (Riva) are reachable from the laptop via `brev port-forward`.
+- Set env from `.env.example`: `NIM_TEXT_BASE_URL`, `NIM_VL_BASE_URL`, `RIVA_SERVER`, `WHISPER_LANGUAGE`, `NGC_API_KEY`, `NVIDIA_API_KEY`. *Verify:* `.env` on the instance mirrors `.env.example`; `python -c "from cutpilot.settings import settings; print(settings)"` prints the full contract.
+- Launch the three NIM containers on Brev:
+  - `docker run --gpus all -p 8100:50051 -e NGC_API_KEY nvcr.io/nim/nvidia/riva-asr:<tag>` (Whisper-Large ASR, gRPC).
+  - `docker run --gpus all -p 8000:8000 -e NGC_API_KEY nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:<tag>` (text reasoning).
+  - `docker run --gpus all -p 9000:8000 -e NGC_API_KEY nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>` (vision-language).
+  *Verify:* `curl $NIM_TEXT_BASE_URL/models` and `curl $NIM_VL_BASE_URL/models` each return their expected model; `python3 python-clients/scripts/asr/transcribe_file_offline.py --server $RIVA_SERVER --language-code en-US --input-file tests/fixtures/sample.wav` returns a non-empty transcript.
+- Install NeMo Agent Toolkit + Riva client: `pip install -e ".[dev]"`. *Verify:* `nat --help` lists `run`, `serve`, `mcp`; `from nat.cli.register_workflow import register_function` imports; `import riva.client` imports.
 - Agree on manifest JSON schema (Dev A writes, Dev B reviews). *Verify:* schema file committed, one hand-written example validates.
 - Agree on output directory layout. *Verify:* both devs can name the path to every artifact without checking.
 - Split tracks and start.
