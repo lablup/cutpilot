@@ -28,7 +28,7 @@ Stack: **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`, CLI `nat`) orchestrates a tw
 | `8000` | NIM Nemotron-3 Nano 30B A3B | Editor — text reasoning + tool calling |
 | `9000` | NIM Nemotron Nano 12B V2 VL | Scout — whole-video + frame analysis |
 
-- **Scout** — NAT `@register_function` that reads video + transcript in one pass against the VL NIM and returns a `CandidatesResult` with 5–10 candidate moments and self-scored rubric (hook, self-contained, length-fit, visual-fit, 1–5 each). No tools. No separate critic.
+- **Scout** — NAT `@register_function` (framework wrapper: Google ADK). Transcodes the source to a compact 480p mp4 via ffmpeg, sends it as one `video/mp4` Part through ADK's `LiteLlm.generate_content_async`, with `response_schema=CandidatesResult` for Pydantic-structured output. `media_io_kwargs={"video": {"fps": 2, "num_frames": 128}}` is passed via `extra_body` on the LiteLlm handle so NIM samples enough frames server-side to distinguish moments — **without this, candidates come back as near-duplicates.** Transcript is optional (Whisper is on a sibling branch). Per-candidate repair pads 15–20 s responses up to 20 s; `CandidatesResult.min_length=5` is the fail-closed contract.
 - **Editor** — NAT `tool_calling_agent` wired to the text NIM. Takes top 3 by composite score, validates timestamps against transcript, calls tools to cut/crop/caption.
 - **Orchestrator** — NAT `sequential_executor` composing `[scout, editor]`. Runs via `nat run --config_file=src/cutpilot/configs/cutpilot.yml` (or the `cutpilot` CLI).
 - Tools decorated `framework_wrappers=[LLMFrameworkEnum.ADK]` so they're portable to NAT's `_type: adk` workflow if we ever switch; focus stays on NAT.
@@ -83,10 +83,10 @@ Explicitly deferred to post-hackathon. Do not build these.
 ### Hour 3–6: Core functionality
 
 **Dev A — Scout function**
-- `configs/cutpilot.yml` scaffolded with `llms: _type: nim` block and empty `functions:` / `workflow:` placeholders. *Verify:* `nat run --config_file=configs/cutpilot.yml --input "ping"` loads the config without schema errors.
-- Scout registered as `@register_function(config_type=ScoutConfig)` returning a `CandidatesResult` Pydantic model. Internally calls the NIM VL endpoint once with the video + transcript. *Verify:* calling the function on a fixture returns a validated `CandidatesResult` with ≥5 entries — Pydantic raises if the model returns malformed JSON.
-- Scout system prompt: instructs model to return 5–10 candidates with self-scores in strict JSON (loaded from `prompts/scout.md`). *Verify:* 3 runs on the same source each return parseable JSON with ≥5 candidates; no free-text prose leaks through.
-- Timestamp validation: reject any candidate with timestamps outside source or words missing from transcript (validation happens inside the Scout function, before it returns). *Verify:* unit test with deliberately bad candidates all get rejected.
+- `src/cutpilot/configs/cutpilot.yml` with `llms: _type: nim` block and `functions:` / `workflow:` declared. *Verify:* `nat info components` lists `cutpilot_scout` and the four tool functions after `pip install -e .`.
+- Scout registered as `@register_function(config_type=ScoutConfig, framework_wrappers=[LLMFrameworkEnum.ADK])` returning a `CandidatesResult` Pydantic model. Path: `clients/ffmpeg.prepare_video_for_vl` → `Part.from_bytes(mime_type="video/mp4")` → `LlmRequest(config.response_schema=CandidatesResult)` → `generate_content_async`. *Verify:* `python scripts/scout_smoke.py <video> <run_id>` returns a validated `CandidatesResult` with ≥5 entries end-to-end against the live VL NIM.
+- Scout system prompt: 5–10 candidates with self-scores in strict JSON (loaded from `prompts/scout.md`), explicit "reject <20s / >90s" language because Nemotron VL otherwise undershoots. *Verify:* smoke run on the GTC demo source returns ≥5 distinct candidates, no free-text prose leaks.
+- `media_io_kwargs` on LiteLlm `extra_body`: `{"video": {"fps": 2, "num_frames": 128}}`. *Verify:* candidates describe different moments (not the same "woman on stage" every time). Without this knob NIM defaults to ~8 frames and content collapses.
 
 **Dev B — Clip review cards**
 - Card component with thumbnail, hook title, rationale prose, 4 score bars, download button. *Verify:* card matches mockup, scores render as proportional bars.
