@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 [project]
 name = "cutpilot"
 version = "0.1.0"
-description = "Agentic long-video to short-clip generator. Whisper + Nemotron Nano 2 VL."
+description = "Agentic long-video to short-clip generator. Riva Whisper + Nemotron text/VL on NIM, orchestrated by NeMo Agent Toolkit."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -35,11 +35,14 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",                # pretty terminal output for demo mode
 
-    # Perception
-    "faster-whisper>=1.0",       # Whisper with word-level timestamps
+    # Logging
+    "structlog>=24.1",
 
-    # Agent framework
-    "nvidia-nat[langchain,mcp]>=1.0",  # NeMo Agent Toolkit: agents, tools, workflows, MCP
+    # Perception — Whisper-Large via NVIDIA Riva NIM (gRPC client, not OpenAI-compat)
+    "nvidia-riva-client>=2.16",
+
+    # Agent framework — NAT is primary; ADK wrapper available via nvidia-nat[adk]
+    "nvidia-nat[langchain,adk,mcp]>=1.0",  # NeMo Agent Toolkit + ADK wrappers + MCP
 
     # Media
     "ffmpeg-python>=0.2",        # Python bindings for ffmpeg invocation
