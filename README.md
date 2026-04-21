@@ -17,17 +17,18 @@ Output is three `.mp4` files + per-clip JSON manifests, surfaced through a singl
 
 ## Status
 
-Hackathon-era scaffold. Planning documents are authoritative until the code lands:
+End-to-end wired. `cutpilot <source>` runs ingest → Whisper → Scout (live NIM VL) → top-3 → ffmpeg → manifest and writes clips under `outputs/<run>/`. `cutpilot-serve` exposes the same pipeline over HTTP for the review UI. Two gaps remain: `schemas/manifest.schema.json` (and its generator `scripts/export_schemas.py`) is not yet written, and the declarative NAT `sequential_executor` path in `configs/cutpilot.yml` is reachable via `nat run` but is not what the CLI actually drives — see [CLAUDE.md](CLAUDE.md) for why.
+
+Reference documents:
 
 - **[PRD.md](PRD.md)** — full product requirements
 - **[SPRINT.md](SPRINT.md)** — 12-hour execution cut (wins over PRD on scope conflicts)
 - **[TASKS.md](TASKS.md)** — task breakdown with verifiable outcomes
-- **[scaffold_tree.md](scaffold_tree.md)** — target directory layout
 - **[CLAUDE.md](CLAUDE.md)** — guidance for Claude Code in this repo
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.11+ (dev env is pinned to 3.13 via `.python-version`; `ruff` and `mypy` both target `py313`)
 - `ffmpeg` 6.0+ on `PATH`
 - An **NVIDIA Brev** H100 Launchable (≥70 GB VRAM), provisioned via the Brev CLI
 - NVIDIA NIM container `nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>` running on the Brev instance (pulled with `NGC_API_KEY`), or hosted NIM at `build.nvidia.com` with `NVIDIA_API_KEY` as fallback
@@ -42,16 +43,31 @@ pip install -e ".[dev]"
 ## Run
 
 ```bash
-cutpilot <source.mp4>
+cutpilot <source.mp4>                          # local file
+cutpilot https://youtu.be/<id>                 # yt-dlp handles URL ingest
+cutpilot /path/to/video.mp4 --run-id demo      # custom run id (= output subdir)
 ```
 
-The CLI writes clips and a manifest under `outputs/<run>/` and prints a `file://` URL to the review UI.
+Clips and per-clip manifests land under `outputs/<run>/`; open `ui/index.html` directly (`file://`) to review.
+
+To serve the review UI over HTTP — and accept multipart uploads from the browser:
+
+```bash
+cutpilot-serve                 # defaults to http://127.0.0.1:8080
+```
+
+The declarative NAT workflow in `src/cutpilot/configs/cutpilot.yml` can be exercised directly:
+
+```bash
+nat run --config_file=src/cutpilot/configs/cutpilot.yml --input <source>
+```
 
 ## Development
 
 ```bash
 pytest                          # full suite (unit + integration)
-pytest -m "not integration"     # unit tests only
+pytest -m "not integration"     # unit tests only (fast, no live NIM needed)
+pytest -m integration           # live-NIM / ffmpeg suites — auto-skip when endpoints are down
 ruff check . && ruff format .   # lint + format
 mypy src                        # strict type check
 ```

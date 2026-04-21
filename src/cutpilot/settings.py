@@ -27,7 +27,10 @@ class Settings(BaseSettings):
 
     # --- NVIDIA NIM: Whisper-Large ASR (OpenAI-compatible /v1/audio/transcriptions) ---
     whisper_base_url: str = "http://0.0.0.0:8100/v1"
-    whisper_model: str = "whisper-large-v3:ofl-rmir-26.01.1"
+    # Empty default → omit `model` from the transcription request. Riva-style
+    # Whisper NIMs (API v1.5.1) reject explicit model names and pick their
+    # loaded default. Set WHISPER_MODEL only when your NIM build requires it.
+    whisper_model: str = ""
     whisper_language: str = "en"  # ISO-639-1, as OpenAI audio API expects
     # The NIM rejects audio above its internal cap with `400 audio too long`; we
     # pre-split into chunks of this length (seconds) and stitch the transcripts

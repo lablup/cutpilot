@@ -23,8 +23,15 @@ from typing import Literal, TypeAlias
 import structlog
 
 from cutpilot import paths, persistence, prompts
-from cutpilot.agents.scout import scout_core
-from cutpilot.clients.ffmpeg import crop_9_16_center, cut_reencode, extract_audio
+from cutpilot.agents.scout import scout_core, scout_text_core, scout_vl_sliding
+from cutpilot.clients.ffmpeg import prepare_video_for_vl
+from cutpilot import paths as paths_mod  # noqa: F401 — re-used via paths above
+from cutpilot.clients.ffmpeg import (
+    concat_reencode,
+    crop_9_16_center,
+    cut_reencode,
+    extract_audio,
+)
 from cutpilot.clients.nim import make_vl_llm
 from cutpilot.clients.whisper import transcribe
 from cutpilot.clients.youtube import download, is_url
@@ -133,23 +140,74 @@ async def _run_nat_workflow(
     passing `(run_id, source_path)` to Scout needs a JSON-dispatcher layer we
     don't yet need.
     """
-    llm = make_vl_llm()
-    candidates: CandidatesResult = await scout_core(
-        llm=llm,
-        source_path=source,
+    # Three-NIM architecture (matches PRD):
+    #   1. Whisper → transcript (already done)
+    #   2. VL NIM sliding-window scan → per-window visual scores + hooks
+    #   3. Text NIM reads transcript + window scores → picks candidates
+    # VL pattern-collapses on full long videos but is fine on short windows, so
+    # we slide a short window across the source instead of one big call.
+    vl_video = paths.vl_video_path(run_id)
+    if not vl_video.exists():
+        await prepare_video_for_vl(source, vl_video)
+
+    windows = await scout_vl_sliding(
+        vl_video_path=vl_video,
+        duration=transcript.duration,
         run_id=run_id,
-        system_prompt=prompts.load("scout"),
-        transcript=transcript if transcript.segments else None,
     )
+    log.info(
+        "pipeline.vl_scan_done",
+        n_windows=len(windows),
+        mean_visual_score=(
+            round(sum(w.visual_score for w in windows) / len(windows), 2)
+            if windows else None
+        ),
+    )
+
+    if transcript.segments:
+        log.info(
+            "pipeline.scout_input",
+            strategy="text_nim+vl_windows",
+            transcript_segments=len(transcript.segments),
+            transcript_duration=transcript.duration,
+            n_windows=len(windows),
+        )
+        candidates: CandidatesResult = await scout_text_core(
+            transcript=transcript,
+            run_id=run_id,
+            system_prompt=prompts.load("scout"),
+            windows=windows,
+        )
+    else:
+        log.info("pipeline.scout_input", strategy="vl_nim_fallback")
+        llm = make_vl_llm()
+        candidates = await scout_core(
+            llm=llm,
+            source_path=source,
+            run_id=run_id,
+            system_prompt=prompts.load("scout"),
+            transcript=None,
+        )
     log.info("pipeline.scout_done", n_candidates=len(candidates.candidates))
 
     _emit(on_stage, "editing")
     top3 = sorted(candidates.candidates, key=lambda c: c.scores.composite, reverse=True)[:3]
+    for rank, cand in enumerate(top3, start=1):
+        log.info(
+            "pipeline.top3_selected",
+            rank=rank,
+            start_ts=cand.start_ts,
+            end_ts=cand.end_ts,
+            duration=cand.end_ts - cand.start_ts,
+            composite=cand.scores.composite,
+            hook=cand.hook[:80],
+        )
 
     manifests: list[ClipManifest] = []
     for idx, cand in enumerate(top3, start=1):
         output_path = paths.clip_path(run_id, idx)
         await _materialize_clip(source, cand.start_ts, cand.end_ts, output_path)
+        size_mb = output_path.stat().st_size / (1024 * 1024) if output_path.exists() else 0.0
         log.info(
             "pipeline.clip_materialized",
             clip_index=idx,
@@ -157,6 +215,7 @@ async def _run_nat_workflow(
             end_ts=cand.end_ts,
             composite=cand.scores.composite,
             output=str(output_path),
+            size_mb=round(size_mb, 2),
         )
         manifests.append(
             ClipManifest(
@@ -171,6 +230,22 @@ async def _run_nat_workflow(
                 output_path=output_path,
             )
         )
+
+    # Stitch: concatenate the 3 clips in chronological order into one highlight
+    # reel at outputs/<run_id>/highlights.mp4. concat_reencode handles codec
+    # drift and produces a single playable mp4 regardless of per-clip encode
+    # variance.
+    chronological = sorted(manifests, key=lambda m: m.start_ts)
+    highlights_path = paths.highlights_path(run_id)
+    await concat_reencode([m.output_path for m in chronological], highlights_path)
+    highlights_mb = highlights_path.stat().st_size / (1024 * 1024)
+    log.info(
+        "pipeline.highlights_stitched",
+        output=str(highlights_path),
+        clips_joined=len(chronological),
+        size_mb=round(highlights_mb, 2),
+    )
+
     return manifests
 
 

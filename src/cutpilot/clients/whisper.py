@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from openai import AsyncOpenAI
+from openai import NOT_GIVEN, AsyncOpenAI
 
 from cutpilot.clients.ffmpeg import probe_duration, split_audio
 from cutpilot.models import Transcript, TranscriptSegment, Word
@@ -129,17 +129,18 @@ async def _transcribe_one(*, client: AsyncOpenAI, chunk_path: Path) -> Any:
     may 400 on strict NIMs, so we omit it in the non-verbose path.
     """
     response_format = settings.whisper_response_format
+    model = settings.whisper_model or NOT_GIVEN  # Riva NIMs reject explicit names; omit.
     with chunk_path.open("rb") as chunk_file:
         if response_format == "verbose_json":
             return await client.audio.transcriptions.create(
-                model=settings.whisper_model,
+                model=model,
                 file=chunk_file,
                 language=settings.whisper_language,
                 response_format="verbose_json",
                 timestamp_granularities=["word", "segment"],
             )
         return await client.audio.transcriptions.create(
-            model=settings.whisper_model,
+            model=model,
             file=chunk_file,
             language=settings.whisper_language,
             response_format=response_format,

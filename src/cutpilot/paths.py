@@ -75,6 +75,16 @@ def candidates_json_path(run_id: str) -> Path:
     return work_dir(run_id) / "candidates.json"
 
 
+def scout_raw_response_path(run_id: str) -> Path:
+    """Raw VL-NIM response (pre-parse, pre-repair) — debug artifact."""
+    return work_dir(run_id) / "scout_raw_response.json"
+
+
+def highlights_path(run_id: str) -> Path:
+    """Stitched reel: the 3 top clips concatenated in chronological order."""
+    return run_outputs_dir(run_id) / "highlights.mp4"
+
+
 def clip_path(run_id: str, clip_index: int) -> Path:
     return run_outputs_dir(run_id) / f"clip_{clip_index}.mp4"
 

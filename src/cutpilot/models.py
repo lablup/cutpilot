@@ -62,6 +62,7 @@ class Candidate(BaseModel):
     hook: str
     rationale: str
     scores: RubricScores
+    visual_hook: str | None = None  # VL-NIM window description, when sliding scan ran
 
     @model_validator(mode="after")
     def _duration_in_range(self) -> Candidate:
@@ -71,6 +72,17 @@ class Candidate(BaseModel):
         if not (20.0 <= duration <= 90.0):
             raise ValueError(f"duration {duration:.1f}s outside 20–90s range")
         return self
+
+
+class WindowAnalysis(BaseModel):
+    """VL NIM's read of a single time-window of the source. One per sliding scan step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start_ts: float = Field(ge=0)
+    end_ts: float
+    visual_score: int = Field(ge=1, le=5)
+    visual_hook: str
 
 
 class CandidatesResult(BaseModel):

@@ -55,9 +55,12 @@ class TestRepairCandidate:
         raw = _c(0.0, MIN_ACCEPTABLE_S - 0.5)
         assert _repair_candidate(raw) is None
 
-    def test_too_long_dropped(self) -> None:
-        raw = _c(0.0, MAX_DURATION_S + 1.0)
-        assert _repair_candidate(raw) is None
+    def test_too_long_truncated(self) -> None:
+        raw = _c(10.0, MAX_DURATION_S + 50.0)  # 130s, way too long
+        out = _repair_candidate(raw)
+        assert out is not None
+        assert out["start_ts"] == 10.0, "start point preserved"
+        assert out["end_ts"] - out["start_ts"] == pytest.approx(MAX_DURATION_S)
 
     def test_zero_or_negative_duration_dropped(self) -> None:
         assert _repair_candidate(_c(50.0, 50.0)) is None
@@ -75,7 +78,8 @@ class TestParseCandidates:
         assert len(result.candidates) == 5
 
     def test_repair_and_drop_mixed(self) -> None:
-        # 3 short-but-salvageable (pad), 2 fine, 2 unsalvageable = 5 survivors.
+        # 3 short-but-salvageable (pad), 2 fine, 1 too-long (truncated), 1
+        # unsalvageable (too short) = 6 survivors.
         raw = [
             _c(0.0, 16.0),     # 16s → pad to 20
             _c(50.0, 67.0),    # 17s → pad
@@ -83,10 +87,13 @@ class TestParseCandidates:
             _c(200.0, 230.0),  # 30s → keep
             _c(300.0, 350.0),  # 50s → keep
             _c(400.0, 400.5),  # too short → drop
-            _c(500.0, 600.5),  # too long → drop
+            _c(500.0, 600.5),  # 100.5s → truncate to 90s
         ]
         result = _parse_candidates(json.dumps({"candidates": raw}))
-        assert len(result.candidates) == 5
+        assert len(result.candidates) == 6
+        # Verify the too-long one was truncated, not dropped
+        truncated = next(c for c in result.candidates if c.start_ts == 500.0)
+        assert truncated.end_ts == 590.0
 
     def test_all_unsalvageable_fails_closed(self) -> None:
         raw = [_c(0.0, 5.0) for _ in range(6)]  # all too short
