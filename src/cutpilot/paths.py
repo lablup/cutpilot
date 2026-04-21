@@ -19,8 +19,21 @@ def run_outputs_dir(run_id: str) -> Path:
     return (settings.cutpilot_outputs_dir / run_id).resolve()
 
 
+def source_video_path(run_id: str) -> Path:
+    """Local landing path for a remotely-fetched source (YouTube etc.).
+
+    The pipeline writes yt-dlp output here; `merge_output_format=mp4` keeps
+    the extension stable. Local-file sources do NOT use this path."""
+    return work_dir(run_id) / "source.mp4"
+
+
 def audio_wav_path(run_id: str) -> Path:
     return work_dir(run_id) / "audio.wav"
+
+
+def whisper_chunks_dir(run_id: str) -> Path:
+    """Where `split_audio` lands per-chunk WAVs before Whisper transcribes them."""
+    return work_dir(run_id) / "whisper_chunks"
 
 
 def transcript_json_path(run_id: str) -> Path:

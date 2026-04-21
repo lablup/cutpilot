@@ -17,6 +17,27 @@ async def _run(args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg failed ({proc.returncode}): {stderr.decode(errors='replace')}")
 
 
+async def probe_duration(source: Path) -> float:
+    """Return the duration of `source` in seconds via ffprobe.
+
+    Used by the Whisper client to size the synthetic segment spans when the
+    NIM returns text-only responses (no native timestamps)."""
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(source),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"ffprobe failed ({proc.returncode}): {stderr.decode(errors='replace')}"
+        )
+    return float(stdout.decode().strip())
+
+
 async def extract_audio(source: Path, output: Path) -> None:
     """Demux audio to 16 kHz mono WAV — the rate Whisper expects."""
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -25,6 +46,33 @@ async def extract_audio(source: Path, output: Path) -> None:
         "-vn", "-ac", "1", "-ar", "16000",
         str(output),
     ])
+
+
+async def split_audio(
+    *,
+    source: Path,
+    chunk_seconds: int,
+    output_dir: Path,
+) -> list[Path]:
+    """Split a WAV into fixed-length chunks via ffmpeg's segment muxer.
+
+    Callers get back chunk paths in chronological order. Each chunk starts
+    at `index * chunk_seconds` in the source, which lets the Whisper client
+    recover absolute timestamps by offsetting chunk-local ones.
+
+    `-c copy` works cleanly on PCM WAV (no inter-frame deps), so this is
+    fast and drift-free.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pattern = output_dir / "chunk_%04d.wav"
+    await _run([
+        "-i", str(source),
+        "-f", "segment",
+        "-segment_time", str(chunk_seconds),
+        "-c", "copy",
+        str(pattern),
+    ])
+    return sorted(output_dir.glob("chunk_*.wav"))
 
 
 async def cut_copy(source: Path, start: float, end: float, output: Path) -> None:

@@ -1,38 +1,51 @@
 """CutPilot CLI — Typer entrypoint.
 
 Usage:
-    cutpilot run <source.mp4>
+    cutpilot <source>                          # local file or URL
+    cutpilot https://youtu.be/cW_POtTfJVM
+    cutpilot /path/to/video.mp4 --run-id demo
 """
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import structlog
 import typer
 
 from cutpilot.pipeline import run_pipeline
 
-app = typer.Typer(
-    name="cutpilot",
-    help="Agentic long-video to short-clip generator.",
-    no_args_is_help=True,
-)
 log = structlog.get_logger()
 
 
-@app.command()
-def run(
-    source: Path = typer.Argument(..., exists=True, readable=True, help="Input video file."),
-    run_id: str = typer.Option("default", help="Run identifier — becomes the output subdirectory."),
+def main(
+    source: str = typer.Argument(
+        ...,
+        help="Local video file path or an http(s) URL (YouTube, Vimeo, etc.).",
+    ),
+    run_id: str = typer.Option(
+        "default",
+        "--run-id",
+        help="Run identifier — becomes the output subdirectory.",
+    ),
 ) -> None:
     """Run the full CutPilot pipeline: ingest → transcribe → agents → save."""
-    log.info("cli.run.start", source=str(source), run_id=run_id)
+    log.info("cli.run.start", source=source, run_id=run_id)
     manifests = asyncio.run(run_pipeline(source=source, run_id=run_id))
     log.info("cli.run.done", clips=len(manifests))
-    for m in manifests:
-        typer.echo(f"clip_{m.clip_index}: {m.output_path}")
+    for manifest in manifests:
+        typer.echo(f"clip_{manifest.clip_index}: {manifest.output_path}")
+
+
+def app() -> None:
+    """Entry point referenced by `[project.scripts]` in pyproject.toml.
+
+    `typer.run` constructs a single-command Typer app, so `cutpilot <source>`
+    works without a subcommand name. Using `@app.callback()` instead makes Click
+    run in group mode, which requires a subcommand and breaks positional
+    parsing for single-command CLIs.
+    """
+    typer.run(main)
 
 
 if __name__ == "__main__":

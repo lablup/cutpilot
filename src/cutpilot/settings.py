@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     whisper_base_url: str = "http://0.0.0.0:8100/v1"
     whisper_model: str = "whisper-large-v3:ofl-rmir-26.01.1"
     whisper_language: str = "en"  # ISO-639-1, as OpenAI audio API expects
+    # The NIM rejects audio above its internal cap with `400 audio too long`; we
+    # pre-split into chunks of this length (seconds) and stitch the transcripts
+    # back together. 300s is safe for all current Whisper-Large NIM builds.
+    whisper_max_chunk_seconds: int = 300
+    # `json` returns `{text: "..."}` only and is supported by every NIM build.
+    # `verbose_json` adds segment/word timestamps but is unsupported by the
+    # minimal Whisper-Large NIM. Override to `verbose_json` if your deployment
+    # supports it (the client shape-detects segments regardless).
+    whisper_response_format: str = "json"
 
     # --- Credentials ---
     nvidia_api_key: str = ""
