@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CutPilot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              accent: {
+                500: "#a855f7",
+                600: "#9333ea",
+                700: "#7e22ce",
+              },
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      html,
+      body {
+        background: #0a0a0a;
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+      }
+    </style>
+  </head>
+  <body class="min-h-screen text-neutral-100">
+    <div class="max-w-5xl mx-auto px-6 py-10">
+      <header class="mb-10">
+        <h1 class="text-3xl font-semibold">CutPilot</h1>
+        <p class="text-neutral-400 mt-1">
+          Long-form video → three vertical 30–60s clips with captions and a reasoning trace.
+        </p>
+      </header>
+
+      <form id="run-form" class="mb-8">
+        <div class="flex flex-col sm:flex-row gap-2">
+          <input
+            id="source"
+            type="text"
+            placeholder="YouTube URL or local file path on the server"
+            autocomplete="off"
+            class="flex-1 bg-neutral-900 border border-neutral-800 rounded-md px-3 py-2 outline-none focus:border-accent-500 placeholder-neutral-500"
+          />
+          <button
+            id="submit-btn"
+            type="submit"
+            class="bg-accent-600 hover:bg-accent-500 disabled:bg-neutral-800 disabled:text-neutral-500 text-white font-medium px-5 py-2 rounded-md transition-colors"
+          >
+            Start
+          </button>
+        </div>
+        <div class="mt-3 flex items-center gap-3 text-sm text-neutral-500">
+          <span>or upload a video file</span>
+          <input
+            id="file"
+            type="file"
+            accept="video/*"
+            class="text-neutral-300 text-sm file:mr-3 file:border-0 file:rounded-md file:bg-neutral-800 file:hover:bg-neutral-700 file:cursor-pointer file:px-3 file:py-1.5 file:text-neutral-200"
+          />
+          <button
+            id="clear-file-btn"
+            type="button"
+            class="hidden text-neutral-400 hover:text-neutral-200 underline"
+          >
+            clear
+          </button>
+        </div>
+        <p id="form-hint" class="mt-2 text-xs text-neutral-600">
+          URL or upload — not both. Uploads win if you've picked a file.
+        </p>
+      </form>
+
+      <section
+        id="status-panel"
+        class="hidden mb-8 bg-neutral-900 border border-neutral-800 rounded-md p-4"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-xs uppercase tracking-wider text-neutral-500">Run</div>
+            <div id="run-id" class="mono text-sm mt-0.5"></div>
+          </div>
+          <div id="status-badge" class="px-2 py-1 text-xs rounded bg-neutral-800"></div>
+        </div>
+        <ol id="stage-list" class="mt-4 space-y-1 text-sm text-neutral-400"></ol>
+        <div id="error-box" class="hidden mt-3 p-2 rounded bg-red-950/60 text-red-300 mono text-xs whitespace-pre-wrap"></div>
+      </section>
+
+      <section id="clips" class="hidden grid grid-cols-1 md:grid-cols-3 gap-4"></section>
+    </div>
+
+    <script>
+      const STAGES = ["pending", "downloading", "transcribing", "scouting", "editing", "done"];
+      const form = document.getElementById("run-form");
+      const submitBtn = document.getElementById("submit-btn");
+      const sourceInput = document.getElementById("source");
+      const fileInput = document.getElementById("file");
+      const clearFileBtn = document.getElementById("clear-file-btn");
+      const panel = document.getElementById("status-panel");
+      const runIdEl = document.getElementById("run-id");
+      const badge = document.getElementById("status-badge");
+      const stageList = document.getElementById("stage-list");
+      const errorBox = document.getElementById("error-box");
+      const clipsEl = document.getElementById("clips");
+
+      fileInput.addEventListener("change", () => {
+        clearFileBtn.classList.toggle("hidden", fileInput.files.length === 0);
+      });
+      clearFileBtn.addEventListener("click", () => {
+        fileInput.value = "";
+        clearFileBtn.classList.add("hidden");
+      });
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const file = fileInput.files[0];
+        const source = sourceInput.value.trim();
+        if (!file && !source) return;
+
+        submitBtn.disabled = true;
+        clipsEl.classList.add("hidden");
+        clipsEl.innerHTML = "";
+        errorBox.classList.add("hidden");
+
+        try {
+          const state = await submit({ file, source });
+          showPanel(state);
+          poll(state.run_id).catch((err) => showError(String(err)));
+        } catch (err) {
+          showError(String(err));
+          submitBtn.disabled = false;
+        }
+      });
+
+      async function submit({ file, source }) {
+        if (file) {
+          const formData = new FormData();
+          formData.append("file", file);
+          const res = await fetch("/runs/upload", { method: "POST", body: formData });
+          if (!res.ok) throw new Error(`POST /runs/upload ${res.status}`);
+          return res.json();
+        }
+        const res = await fetch("/runs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source }),
+        });
+        if (!res.ok) throw new Error(`POST /runs ${res.status}`);
+        return res.json();
+      }
+
+      async function poll(runId) {
+        while (true) {
+          const res = await fetch(`/runs/${runId}`);
+          if (!res.ok) throw new Error(`GET /runs/${runId} ${res.status}`);
+          const state = await res.json();
+          showPanel(state);
+          if (state.status === "done") {
+            renderClips(state);
+            submitBtn.disabled = false;
+            return;
+          }
+          if (state.status === "failed") {
+            showError(state.error || "pipeline failed");
+            submitBtn.disabled = false;
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      }
+
+      function showPanel(state) {
+        panel.classList.remove("hidden");
+        runIdEl.textContent = state.run_id;
+        badge.textContent = state.status;
+        badge.className = `px-2 py-1 text-xs rounded ${badgeClass(state.status)}`;
+        const currentIndex = STAGES.indexOf(state.status);
+        stageList.innerHTML = STAGES.filter((s) => s !== "pending")
+          .map((stage, i) => {
+            const stageIdx = STAGES.indexOf(stage);
+            let marker;
+            if (state.status === "failed" && stageIdx > currentIndex) marker = "·";
+            else if (stageIdx < currentIndex) marker = "✓";
+            else if (stageIdx === currentIndex) marker = "▸";
+            else marker = "·";
+            const cls = stageIdx <= currentIndex ? "text-neutral-200" : "text-neutral-600";
+            return `<li class="${cls}"><span class="inline-block w-4">${marker}</span> ${stage}</li>`;
+          })
+          .join("");
+        if (state.error) {
+          errorBox.textContent = state.error;
+          errorBox.classList.remove("hidden");
+        }
+      }
+
+      function showError(message) {
+        panel.classList.remove("hidden");
+        errorBox.textContent = message;
+        errorBox.classList.remove("hidden");
+      }
+
+      function badgeClass(status) {
+        if (status === "done") return "bg-green-900/60 text-green-300";
+        if (status === "failed") return "bg-red-900/60 text-red-300";
+        return "bg-accent-700/40 text-accent-500";
+      }
+
+      function renderClips(state) {
+        clipsEl.classList.remove("hidden");
+        clipsEl.innerHTML = state.manifests
+          .map(
+            (manifest) => `
+              <article class="bg-neutral-900 border border-neutral-800 rounded-md overflow-hidden">
+                <video
+                  src="/outputs/${state.run_id}/clip_${manifest.clip_index}.mp4"
+                  controls
+                  class="w-full aspect-[9/16] bg-black"
+                ></video>
+                <div class="p-3 space-y-2">
+                  <div class="font-semibold">${escapeHtml(manifest.hook)}</div>
+                  <div class="text-sm text-neutral-400">${escapeHtml(manifest.rationale)}</div>
+                  <div class="text-xs text-neutral-500 mono">
+                    hook ${manifest.scores.hook} ·
+                    self ${manifest.scores.self_contained} ·
+                    len ${manifest.scores.length_fit} ·
+                    vis ${manifest.scores.visual_fit}
+                  </div>
+                </div>
+              </article>
+            `,
+          )
+          .join("");
+      }
+
+      function escapeHtml(value) {
+        const div = document.createElement("div");
+        div.textContent = value ?? "";
+        return div.innerHTML;
+      }
+    </script>
+  </body>
+</html>

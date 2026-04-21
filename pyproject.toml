@@ -51,6 +51,14 @@ dependencies = [
 
     # Schema export / validation
     "jsonschema>=4.22",
+
+    # HTTP façade — thin FastAPI wrapper around `run_pipeline` for the review UI.
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    # Required by FastAPI's UploadFile/File/Form deps. Not bundled with plain
+    # `fastapi`; the `fastapi[standard]` extra pulls it in along with several
+    # unrelated packages we don't need.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -67,9 +75,12 @@ dev = [
 Homepage = "https://github.com/lablup/cutpilot"
 "Bug Tracker" = "https://github.com/lablup/cutpilot/issues"
 
-# Single CLI entry point — SSoT for invocation.
+# CLI entry points.
+#   `cutpilot <source>`  — offline pipeline run (CLI path).
+#   `cutpilot-serve`     — FastAPI HTTP server for the UI.
 [project.scripts]
 cutpilot = "cutpilot.cli:app"
+cutpilot-serve = "cutpilot.cli:serve"
 
 # NeMo Agent Toolkit component registration. `nat` reads this table at install
 # time to discover `@register_function` components. If a tool doesn't show up

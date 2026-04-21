@@ -3,11 +3,17 @@
 This file holds no agent logic. Agent work is delegated to the NAT workflow loaded
 from `configs/cutpilot.yml`. This is the only place that combines perception,
 NAT workflow invocation, and manifest persistence.
+
+An optional `on_stage` callback lets a frontend (the FastAPI server) observe
+stage transitions without coupling the pipeline to HTTP concerns. The callback
+receives a literal stage name — see `PipelineStage` below for the closed set.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Literal, TypeAlias
 
 import structlog
 
@@ -19,16 +25,29 @@ from cutpilot.models import ClipManifest, Transcript
 
 log = structlog.get_logger()
 
+PipelineStage: TypeAlias = Literal[
+    "downloading",
+    "transcribing",
+    "scouting",
+    "editing",
+]
+StageCallback: TypeAlias = Callable[[PipelineStage], None] | None
+
 
 class SourceNotFoundError(FileNotFoundError):
     """Raised when a local source path does not resolve to a readable file."""
 
 
-async def run_pipeline(source: str, run_id: str) -> list[ClipManifest]:
+async def run_pipeline(
+    source: str,
+    run_id: str,
+    on_stage: StageCallback = None,
+) -> list[ClipManifest]:
     """End-to-end pipeline. `source` is either a local file path or an http(s) URL."""
     paths.ensure_dirs(run_id)
 
     # 0. Ingest — resolve the CLI argument into a concrete local file
+    _emit(on_stage, "downloading")
     local_source = await _resolve_source(source=source, run_id=run_id)
     log.info("pipeline.source_resolved", path=str(local_source))
 
@@ -38,6 +57,7 @@ async def run_pipeline(source: str, run_id: str) -> list[ClipManifest]:
     log.info("pipeline.audio_extracted", path=str(wav_path))
 
     # 2. Perception — Whisper-Large via NIM (OpenAI-compat /v1/audio/transcriptions)
+    _emit(on_stage, "transcribing")
     transcript: Transcript = await transcribe(
         audio_path=wav_path,
         source_path=local_source,
@@ -47,10 +67,12 @@ async def run_pipeline(source: str, run_id: str) -> list[ClipManifest]:
     log.info("pipeline.transcribed", segments=len(transcript.segments))
 
     # 3. Agent workflow — Scout (VL NIM) → Editor (text NIM + tools)
+    _emit(on_stage, "scouting")
     manifests = await _run_nat_workflow(
         source=local_source,
         transcript=transcript,
         run_id=run_id,
+        on_stage=on_stage,
     )
     log.info("pipeline.done", clips=len(manifests))
 
@@ -59,6 +81,16 @@ async def run_pipeline(source: str, run_id: str) -> list[ClipManifest]:
         persistence.save(manifest, paths.clip_manifest_path(run_id, manifest.clip_index))
 
     return manifests
+
+
+def _emit(on_stage: StageCallback, stage: PipelineStage) -> None:
+    """Swallow callback errors — observability must never break the pipeline."""
+    if on_stage is None:
+        return
+    try:
+        on_stage(stage)
+    except Exception:
+        log.exception("pipeline.on_stage_failed", stage=stage)
 
 
 async def _resolve_source(*, source: str, run_id: str) -> Path:
@@ -83,12 +115,12 @@ async def _run_nat_workflow(
     source: Path,
     transcript: Transcript,
     run_id: str,
+    on_stage: StageCallback = None,
 ) -> list[ClipManifest]:
     """Load and invoke the NAT workflow from `configs/cutpilot.yml`.
 
     TODO: wire up `nat.runtime.load_workflow(...)` once tool and scout registrations
-    are exercised end-to-end. The workflow returns the three-clip plan; materialization
-    (ffmpeg calls) happens inside the Editor's tool calls and yields file paths we read
-    back into `ClipManifest` objects here.
+    are exercised end-to-end. When wired, emit `on_stage("editing")` at the
+    boundary between Scout (JSON candidates) and Editor (tool-calling materialization).
     """
     raise NotImplementedError("Wire to nat.runtime once tool registrations are green.")

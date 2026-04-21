@@ -48,5 +48,23 @@ def app() -> None:
     typer.run(main)
 
 
+def _serve_cmd(
+    host: str = typer.Option("127.0.0.1", help="Interface to bind."),
+    port: int = typer.Option(8080, help="Port to listen on."),
+    reload: bool = typer.Option(False, help="Auto-reload on code changes (dev only)."),
+) -> None:
+    """Start the FastAPI HTTP server that backs the review UI."""
+    # Imported lazily so `cutpilot <source>` doesn't pay the FastAPI import cost.
+    import uvicorn
+
+    log.info("cli.serve.start", host=host, port=port, reload=reload)
+    uvicorn.run("cutpilot.server:app", host=host, port=port, reload=reload)
+
+
+def serve() -> None:
+    """Entry point for `cutpilot-serve`."""
+    typer.run(_serve_cmd)
+
+
 if __name__ == "__main__":
     app()
