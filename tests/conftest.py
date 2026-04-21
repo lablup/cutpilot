@@ -1,17 +1,48 @@
-"""Shared test fixtures. Generates tiny media files via `ffmpeg lavfi` so
-integration tests have real inputs without any binary assets in the repo."""
+"""Shared test fixtures.
+
+`tiny_*` fixtures generate content-free ffmpeg lavfi clips — only use them
+from tests that exercise the ffmpeg subprocess itself (cut/crop/burn).
+Any test that sends pixels or audio to an LLM/VL/ASR NIM must use
+`gtc_slice_*` instead — synthetic content makes LLM output meaningless."""
 
 from __future__ import annotations
 
+import asyncio
 import shutil
+import socket
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
+
+from cutpilot.clients.ffmpeg import extract_audio
+from cutpilot.clients.whisper import transcribe
+from cutpilot.models import Transcript
+from cutpilot.settings import settings
+
+GTC_VIDEO = (
+    Path(__file__).resolve().parents[1]
+    / "sources"
+    / "NVIDIA GTC DC 2025： Healthcare Special Address [cW_POtTfJVM].mp4"
+)
 
 
 def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
+
+
+def _reachable(url: str, timeout: float = 3.0) -> bool:
+    parsed = urlparse(url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if host is None:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def _lavfi(args: list[str]) -> None:
@@ -73,23 +104,56 @@ def tiny_audio(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return out
 
 
-@pytest.fixture(scope="session")
-def scout_test_video(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """180-second 640x360 mp4 — long enough for Scout's min-5 × 20-s contract.
+# ---------------------------------------------------------------------------
+# Real-content fixtures — 120-second slice of the downloaded GTC talk.
+# Required for any integration test that feeds pixels/audio to an LLM NIM.
+# ---------------------------------------------------------------------------
 
-    `testsrc` embeds a moving clock and a frame counter, so VL models have enough
-    structural variation to propose distinct candidates. Session-scoped so the
-    expensive ffmpeg generation runs once per test session.
-    """
+@pytest.fixture(scope="session")
+def gtc_slice_video(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """120-second slice of the real GTC Healthcare talk (starts 60s in to
+    skip the title card). Session-scoped — one ffmpeg cut per test run.
+    Skips if the GTC video or ffmpeg is missing."""
     if not _ffmpeg_available():
         pytest.skip("ffmpeg not on PATH")
-    out = tmp_path_factory.mktemp("fixtures") / "scout_test.mp4"
-    _lavfi([
-        "-f", "lavfi", "-i", "testsrc=duration=180:size=640x360:rate=30",
-        "-f", "lavfi", "-i", "sine=frequency=440:duration=180",
-        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "64k",
-        "-shortest",
-        str(out),
-    ])
+    if not GTC_VIDEO.exists():
+        pytest.skip(f"GTC source video missing at {GTC_VIDEO}")
+    out = tmp_path_factory.mktemp("fixtures") / "gtc_slice.mp4"
+    # Re-encode (not `-c copy`) so we land on a keyframe at ss=60 — cleaner
+    # input for VL and avoids the first-frame-black artifact on copy cuts.
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", "60", "-i", str(GTC_VIDEO), "-t", "120",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "96k",
+            str(out),
+        ],
+        check=True,
+    )
     return out
+
+
+@pytest.fixture(scope="session")
+def gtc_slice_transcript(
+    gtc_slice_video: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Transcript:
+    """Real Whisper transcript of the 120s GTC slice. Session-scoped so only
+    one Whisper round-trip happens per run. Skips if the Whisper NIM is
+    unreachable."""
+    if not _reachable(settings.whisper_base_url):
+        pytest.skip(f"Whisper NIM not reachable at {settings.whisper_base_url}")
+    work = tmp_path_factory.mktemp("fixtures_audio")
+    audio = work / "gtc_slice.wav"
+    chunks_dir = work / "chunks"
+
+    async def _run() -> Transcript:
+        await extract_audio(gtc_slice_video, audio)
+        return await transcribe(
+            audio_path=audio,
+            source_path=gtc_slice_video,
+            chunks_dir=chunks_dir,
+        )
+
+    return asyncio.run(_run())

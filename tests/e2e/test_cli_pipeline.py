@@ -1,9 +1,13 @@
-"""End-to-end CLI test — exercises `run_pipeline` against all three live NIMs.
+"""End-to-end CLI test — exercises `run_pipeline` against all three live NIMs
+on the real GTC Healthcare talk we ship as the canonical demo input.
 
 Marked `@pytest.mark.e2e` so the default `pytest` run skips it. Opt in with
 `pytest -m e2e`. Requires:
   - ffmpeg on PATH
   - Whisper, text, and VL NIMs all reachable
+  - `sources/NVIDIA GTC DC 2025： Healthcare Special Address [cW_POtTfJVM].mp4`
+    (download with `yt-dlp https://www.youtube.com/watch?v=cW_POtTfJVM -o
+    'sources/%(title)s [%(id)s].%(ext)s'` — same file the CLI smoke runs on)
 """
 
 from __future__ import annotations
@@ -20,6 +24,12 @@ from cutpilot.settings import settings
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
+GTC_VIDEO = (
+    Path(__file__).resolve().parents[2]
+    / "sources"
+    / "NVIDIA GTC DC 2025： Healthcare Special Address [cW_POtTfJVM].mp4"
+)
+
 
 def _reachable(url: str, timeout: float = 3.0) -> bool:
     parsed = urlparse(url)
@@ -35,11 +45,13 @@ def _reachable(url: str, timeout: float = 3.0) -> bool:
 
 
 async def test_cli_pipeline_e2e(
-    scout_test_video: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Full pipeline: Whisper → VL sliding → text scout → materialize → stitch."""
+    """Full pipeline on the real GTC talk: Whisper → VL sliding → text scout →
+    materialize → stitch. Asserts 3 distinct clips + highlights.mp4."""
+    if not GTC_VIDEO.exists():
+        pytest.skip(f"GTC video missing at {GTC_VIDEO} — run yt-dlp first")
     for label, url in [
         ("whisper", settings.whisper_base_url),
         ("text", settings.nim_text_base_url),
@@ -53,7 +65,7 @@ async def test_cli_pipeline_e2e(
     run_id = "pytest-e2e"
 
     manifests = await run_pipeline(
-        source=str(scout_test_video),
+        source=str(GTC_VIDEO),
         run_id=run_id,
     )
 
