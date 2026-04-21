@@ -156,16 +156,20 @@ The review UI is the primary surface judges see during the pitch. It is a single
 
 ### 9.1 Models and framework
 
-- **NVIDIA NeMo Agent Toolkit (`nvidia-nat`)** — Python toolkit (CLI: `nat`) that defines agents, tools, and multi-agent workflows via YAML. Agent types used here: `tool_calling_agent` for the Editor and `sequential_executor` for the orchestrator. Tools register with `@register_function` and are discovered via the `[project.entry-points.'nat.components']` table in `pyproject.toml`. Extras in use: `nvidia-nat[langchain]` (LangChain adapters) and `nvidia-nat[mcp]` (optional MCP publishing via `nat mcp serve`). Replaces hand-rolled tool-calling logic.
-- **Whisper (large-v3, faster-whisper runtime)** — audio transcription and word-level timestamps. Audio-only; does not see video.
-- **Nemotron Nano 2 VL (12B)** — performs two roles: visual understanding of the source video and agent-level reasoning with tool-calling. Served by **NVIDIA NIM** as `nvidia/nemotron-nano-12b-v2-vl` (OpenAI-compatible `/v1/chat/completions` endpoint). Configured in the NAT workflow via `_type: nim` with `base_url` pointing at the self-hosted NIM container on the Brev H100 instance; the hosted NIM endpoint at `build.nvidia.com` with `NVIDIA_API_KEY` is the fallback. Chosen because it natively supports video and image URLs in the request body, benefits from Efficient Video Sampling (EVS), and is purpose-built for video curation workloads.
+- **NVIDIA NeMo Agent Toolkit (`nvidia-nat`)** — Python toolkit (CLI: `nat`) that defines agents, tools, and multi-agent workflows via YAML. Agent types used here: `tool_calling_agent` for the Editor and `sequential_executor` for the orchestrator. Tools register with `@register_function` and are discovered via the `[project.entry-points.'nat.components']` table in `pyproject.toml`. Tools are decorated with `framework_wrappers=[LLMFrameworkEnum.ADK]` so they remain portable to NAT's `_type: adk` workflow if we ever switch. Extras in use: `nvidia-nat[langchain]`, `nvidia-nat[adk]`, `nvidia-nat[mcp]`.
+- **Whisper-Large via NVIDIA Riva NIM** — audio transcription and word-level timestamps. Served by the Riva ASR NIM at `0.0.0.0:8100` and consumed through `nvidia-riva-client` (gRPC, not OpenAI-compatible). Riva lives outside the NAT `llms:` block — it's a perception-stage client called from `pipeline.py`.
+- **Nemotron-3 Nano 30B A3B (text reasoning)** — powers the Editor's tool-calling loop. Served by NIM as `nvidia/nemotron-3-nano-30b-a3b` on `0.0.0.0:8000` (OpenAI-compatible `/v1/chat/completions`). Text-only is sufficient for the Editor — it receives Scout's structured candidates, validates timestamps, and calls ffmpeg tools.
+- **Nemotron Nano 12B V2 VL (vision-language)** — powers Scout and any on-demand frame analysis. Served by NIM as `nvidia/nemotron-nano-12b-v2-vl` on `0.0.0.0:9000`. Natively supports image URLs and video URLs in the request body, benefits from Efficient Video Sampling (EVS), and is purpose-built for video curation workloads.
 
 ### 9.2 Infrastructure
 
-- Deployed on an **NVIDIA Brev** H100 Launchable (provisioned via the Brev CLI; single node co-locates NIM and Whisper to avoid cross-node I/O).
-- A NIM container (`nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>`) serves Nemotron Nano 2 VL with tool-calling handled natively by NIM — no vLLM tool-choice flags to configure.
-- Whisper runs as a separate inference process on the same GPU node.
-- Agent orchestration is handled by the NeMo Agent Toolkit. A thin Python pipeline wraps non-agent stages (ingest, transcribe, persist) and delegates agent execution to the NAT workflow.
+- Deployed on an **NVIDIA Brev** H100 Launchable (provisioned via the Brev CLI; single node co-locates all three NIM containers to avoid cross-node I/O).
+- Three NIM containers run on the instance:
+  - Riva Whisper-Large ASR → port `8100` (gRPC).
+  - Nemotron-3 Nano 30B A3B (text) → port `8000` (OpenAI-compat).
+  - Nemotron Nano 12B V2 VL (vision-language) → port `9000` (OpenAI-compat).
+- Tool-calling is handled natively by NIM — no vLLM tool-choice flags to configure.
+- Agent orchestration is handled by the NeMo Agent Toolkit. A thin Python pipeline (`src/cutpilot/pipeline.py`) wraps non-agent stages (ingest, Riva transcribe, persist) and delegates agent execution to the NAT workflow in `src/cutpilot/configs/cutpilot.yml`.
 
 ### 9.3 Data flow
 
