@@ -133,8 +133,13 @@ MIN_ACCEPTABLE_S = 12.0
 
 
 def _repair_candidate(raw: dict) -> dict | None:
-    """Symmetrically pad a short-but-close candidate to `MIN_DURATION_S`. Returns
-    None when the candidate is too far out of range to salvage."""
+    """Pad a short-but-close candidate up to `MIN_DURATION_S`. Returns None when
+    the candidate is too far out of range to salvage.
+
+    Pad is split evenly across start and end. If `start_ts` would go below zero,
+    the leftover pad is pushed onto the end so the final duration still equals
+    `MIN_DURATION_S`.
+    """
     try:
         start = float(raw["start_ts"])
         end = float(raw["end_ts"])
@@ -145,8 +150,10 @@ def _repair_candidate(raw: dict) -> dict | None:
         return None
     if duration >= MIN_DURATION_S:
         return raw
-    pad_each_side = (MIN_DURATION_S - duration) / 2
-    return {**raw, "start_ts": max(0.0, start - pad_each_side), "end_ts": end + pad_each_side}
+    need = MIN_DURATION_S - duration
+    pad_left = min(start, need / 2)
+    pad_right = need - pad_left
+    return {**raw, "start_ts": start - pad_left, "end_ts": end + pad_right}
 
 
 def _build_user_text(duration: float, transcript: Transcript | None) -> str:

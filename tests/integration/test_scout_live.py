@@ -24,7 +24,7 @@ from cutpilot import paths, prompts
 from cutpilot.agents.scout import scout_core
 from cutpilot.settings import settings
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 def _reachable(url: str, timeout: float = 3.0) -> bool:
