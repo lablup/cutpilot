@@ -25,19 +25,20 @@ cutpilot/
 │   │   ├── whisper.py                # audio → Transcript
 │   │   └── ffmpeg.py                 # safe ffmpeg invocation
 │   │
-│   ├── tools/                        # plain functions; ADK wraps via signature inspection
+│   ├── configs/
+│   │   └── cutpilot.yml              # SSoT: NAT workflow (llms + functions + workflow)
+│   │
+│   ├── tools/                        # @register_function per file; NAT auto-derives schemas
 │   │   ├── __init__.py               # TOOLS = [cut, crop_9_16, burn_captions, transcript_window]
-│   │   ├── cut.py
+│   │   ├── cut.py                    # exports `register` (hooked via pyproject entry-points)
 │   │   ├── crop.py
 │   │   ├── captions.py
 │   │   └── transcript_window.py
 │   │
 │   └── agents/
-│       ├── __init__.py               # exposes root_agent for ADK web UI discovery
-│       ├── llm.py                    # shared LiteLlm instance (SSoT for model config)
-│       ├── scout.py                  # LlmAgent(output_schema=CandidatesResult)
-│       ├── editor.py                 # LlmAgent(tools=TOOLS)
-│       └── orchestrator.py           # SequentialAgent([scout, editor]) = root_agent
+│       ├── __init__.py
+│       ├── scout.py                  # @register_function returning CandidatesResult (NIM VL call)
+│       └── runtime.py                # thin loader: invokes nat workflow from configs/cutpilot.yml
 │
 ├── prompts/
 │   ├── scout.md

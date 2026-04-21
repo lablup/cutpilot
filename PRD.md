@@ -66,10 +66,11 @@ For the hackathon, the demo audience is NVIDIA judges and the K-AI community —
 
 ### 7.3 Reasoning and selection layer
 
-The system uses a two-agent architecture built on **Google ADK (Agent Development Kit)**. Both agents are ADK `LlmAgent` instances backed by Nemotron Nano 2 VL served through ADK's `LiteLlm` wrapper pointing at a vLLM endpoint. ADK handles tool-calling loops, schema derivation from function signatures, and session state — no custom agent runtime is written.
+The system uses a two-agent workflow built on the **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`). The toolkit is config-driven: agents, tools, and their composition are declared in a single YAML workflow (`configs/cutpilot.yml`). Both agents are backed by Nemotron Nano 2 VL served through NVIDIA NIM; NAT's `_type: nim` LLM provider handles tool-calling and schema validation, so no custom agent runtime is written.
 
-- **Scout** — receives the source video and transcript. In a single pass, proposes 5–10 candidate moments with start/end timestamps, a hook description, a rationale, and self-scored ratings on four axes (hook strength, self-containedness, length fit, visual fit). Self-critique replaces a separate critic pass.
-- **Editor** — receives Scout's ranked candidates, selects the top 3, uses tools to validate timestamps and refine cut boundaries, then commits the final cuts. Editor is the only agent with write-access tools.
+- **Scout** — a deterministic NAT function (`@register_function`) that receives the source video and transcript, calls the NIM VL endpoint once, and returns a validated `CandidatesResult`. In that single pass it proposes 5–10 candidate moments with start/end timestamps, a hook description, a rationale, and self-scored ratings on four axes (hook strength, self-containedness, length fit, visual fit). Scout has no tools — its return type is the schema. Self-critique replaces a separate critic pass.
+- **Editor** — a NAT `tool_calling_agent` that receives Scout's ranked candidates, selects the top 3, uses tools to validate timestamps and refine cut boundaries, then commits the final cuts. Editor is the only component with write-access tools.
+- **Orchestrator** — a NAT `sequential_executor` workflow composing `[scout, editor]`, runnable via `nat run --config_file=configs/cutpilot.yml` or through the `cutpilot` CLI, which loads the same workflow programmatically.
 
 Requirements:
 
@@ -155,15 +156,16 @@ The review UI is the primary surface judges see during the pitch. It is a single
 
 ### 9.1 Models and framework
 
-- **Google ADK (Agent Development Kit)** — Python framework defining agents (`LlmAgent`, `SequentialAgent`), their tools (auto-wrapped from function signatures), and their composition. Replaces hand-rolled tool-calling logic.
+- **NVIDIA NeMo Agent Toolkit (`nvidia-nat`)** — Python toolkit (CLI: `nat`) that defines agents, tools, and multi-agent workflows via YAML. Agent types used here: `tool_calling_agent` for the Editor and `sequential_executor` for the orchestrator. Tools register with `@register_function` and are discovered via the `[project.entry-points.'nat.components']` table in `pyproject.toml`. Extras in use: `nvidia-nat[langchain]` (LangChain adapters) and `nvidia-nat[mcp]` (optional MCP publishing via `nat mcp serve`). Replaces hand-rolled tool-calling logic.
 - **Whisper (large-v3, faster-whisper runtime)** — audio transcription and word-level timestamps. Audio-only; does not see video.
-- **Nemotron Nano 2 VL (12B)** — performs two roles: visual understanding of the source video and agent-level reasoning with tool-calling. Served via vLLM (with `--enable-auto-tool-choice` and a compatible `--tool-call-parser`), called through ADK's `LiteLlm` wrapper using the `hosted_vllm/*` model string. Chosen because it natively supports video input through Efficient Video Sampling and is purpose-built for video curation workloads.
+- **Nemotron Nano 2 VL (12B)** — performs two roles: visual understanding of the source video and agent-level reasoning with tool-calling. Served by **NVIDIA NIM** as `nvidia/nemotron-nano-12b-v2-vl` (OpenAI-compatible `/v1/chat/completions` endpoint). Configured in the NAT workflow via `_type: nim` with `base_url` pointing at the self-hosted NIM container on the Brev H100 instance; the hosted NIM endpoint at `build.nvidia.com` with `NVIDIA_API_KEY` is the fallback. Chosen because it natively supports video and image URLs in the request body, benefits from Efficient Video Sampling (EVS), and is purpose-built for video curation workloads.
 
 ### 9.2 Infrastructure
 
-- Deployed on Backend.AI with vLLM serving Nemotron Nano 2 VL (OpenAI-compatible endpoint with tool-calling enabled).
+- Deployed on an **NVIDIA Brev** H100 Launchable (provisioned via the Brev CLI; single node co-locates NIM and Whisper to avoid cross-node I/O).
+- A NIM container (`nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>`) serves Nemotron Nano 2 VL with tool-calling handled natively by NIM — no vLLM tool-choice flags to configure.
 - Whisper runs as a separate inference process on the same GPU node.
-- Agent orchestration is handled by Google ADK. A thin Python pipeline wraps non-agent stages (ingest, transcribe, persist).
+- Agent orchestration is handled by the NeMo Agent Toolkit. A thin Python pipeline wraps non-agent stages (ingest, transcribe, persist) and delegates agent execution to the NAT workflow.
 
 ### 9.3 Data flow
 
@@ -188,12 +190,13 @@ Source video enters the pipeline. Audio is demuxed and passed to Whisper, produc
 
 - Hackathon development window is approximately 36 hours.
 - Source videos for development and demo are available in advance.
-- Nemotron Nano 2 VL inference is available through vLLM at the venue or via Backend.AI remote access.
+- Nemotron Nano 2 VL inference is available through a self-hosted NIM container on a Brev H100 Launchable, with hosted NIM (`build.nvidia.com`, `NVIDIA_API_KEY`) as fallback.
 - Source videos have a clear primary speaker and are not heavily edited montages.
 
 ## 12. Risks
 
 - **Inference latency risk**: if VL processing of full video is too slow, the agent loop blows the time budget. Mitigation: down-sample video resolution before passing to the model and rely on EVS, and cap analyzed video length to a sliding window guided by the transcript.
+- **NIM endpoint availability**: self-hosted NIM container on Brev may fail to start or rate-limit under load; hosted NIM may return 401/429. Mitigation: `NIM_BASE_URL` defaults to the self-hosted container but can be pointed at `integrate.api.nvidia.com/v1` with `NVIDIA_API_KEY` in a single env-var flip; smoke-test both paths in Phase 0.
 - **ffmpeg edge cases**: audio drift, codec mismatch, or container issues can corrupt output. Mitigation: use copy-codec cuts where possible and re-encode only when adding captions or cropping.
 - **Cut boundary quality**: word-level timestamps drift around laughter and music. Mitigation: pad cuts by 200ms on both sides and use scene detection as a secondary signal.
 - **Crop quality for multi-person scenes**: a naive center crop fails when speakers are off-center. Mitigation: acknowledged as v2 scope; demo material selected to be compatible with center crop.

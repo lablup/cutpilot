@@ -20,12 +20,13 @@ Dev A and Dev B work on parallel tracks. They sync at hours 1, 6, 10, and 11.
 
 ## Architecture (simplified from PRD)
 
-Two agents, both Nemotron Nano 2 VL with different prompts:
+Stack: **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`, CLI `nat`) orchestrates a two-step workflow declared in `configs/cutpilot.yml`. Both steps hit the same Nemotron Nano 2 VL served by **NVIDIA NIM** (self-hosted container on an **NVIDIA Brev** H100 Launchable by default; hosted NIM at `build.nvidia.com` as fallback).
 
-- **Scout** — reads video + transcript in one pass, outputs 5–10 candidate moments with self-scored rubric (hook, self-contained, length-fit, visual-fit, 1–5 each). No separate critic.
-- **Editor** — takes top 3 by composite score, validates timestamps against transcript, calls tools to cut/crop/caption.
+- **Scout** — NAT `@register_function` that reads video + transcript in one pass and returns a `CandidatesResult` with 5–10 candidate moments and self-scored rubric (hook, self-contained, length-fit, visual-fit, 1–5 each). No tools. No separate critic.
+- **Editor** — NAT `tool_calling_agent` that takes top 3 by composite score, validates timestamps against transcript, calls tools to cut/crop/caption.
+- **Orchestrator** — NAT `sequential_executor` composing `[scout, editor]`. Runs via `nat run --config_file=configs/cutpilot.yml` (or the `cutpilot` CLI).
 
-Four tools available to Editor only: `cut`, `crop_9_16_center`, `burn_captions`, `get_transcript_window`.
+Four tools available to Editor only, each registered via `@register_function`: `cut`, `crop_9_16_center`, `burn_captions`, `get_transcript_window`.
 
 ## What we cut from the full PRD
 
@@ -41,13 +42,18 @@ Explicitly deferred to post-hackathon. Do not build these.
 - Reasoning-trace overlay video variant — reasoning lives in the UI only.
 - Reliability testing on many sources — 2 demo sources, 1 backup.
 - CLI `--open` flag — manual browser open is fine.
+- MCP server exposure of CutPilot tools (`nat mcp serve`) — stretch only; skip unless the core demo is green by hour 10.
 
 ## Hour-by-hour plan
 
 ### Hour 0–1: Setup and sync
 
 **Both devs together.**
-- Confirm GPU access, vLLM serving Nemotron Nano 2 VL, Whisper loaded. *Verify:* both models respond to a test prompt.
+- Provision the Brev H100 Launchable and confirm SSH access. *Verify:* `nvidia-smi` on the instance shows a free H100, `brev ls` lists the instance, ports 8000 (NIM) and 8001 (dev server) are reachable from the laptop via `brev port-forward`.
+- Set env: `NGC_API_KEY` (pulls the NIM container), `NVIDIA_API_KEY` (hosted-NIM fallback), `NIM_BASE_URL` (defaults to `http://localhost:8000/v1` on the instance). *Verify:* all three exported, `.env` on the instance mirrors `.env.example`.
+- Launch the NIM container on Brev: `docker run --gpus all -p 8000:8000 -e NGC_API_KEY nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>`. *Verify:* `curl $NIM_BASE_URL/models` returns `nvidia/nemotron-nano-12b-v2-vl`; a chat-completion request with a test video URL returns a non-empty response.
+- Start Whisper (faster-whisper large-v3) on the same node. *Verify:* a 10s audio fixture transcribes in under 5s with word-level timestamps.
+- Install NeMo Agent Toolkit: `pip install 'nvidia-nat[langchain,mcp]'`. *Verify:* `nat --help` lists `run`, `serve`, `mcp`; `from nat.cli.register_workflow import register_function` imports.
 - Agree on manifest JSON schema (Dev A writes, Dev B reviews). *Verify:* schema file committed, one hand-written example validates.
 - Agree on output directory layout. *Verify:* both devs can name the path to every artifact without checking.
 - Split tracks and start.
@@ -57,7 +63,7 @@ Explicitly deferred to post-hackathon. Do not build these.
 **Dev A — Perception pipeline**
 - Ingest: local mp4 file validation + audio demux. *Verify:* 10-min test file produces 16kHz wav in under 10s.
 - Whisper transcript with word timestamps persisted to JSON. *Verify:* 5 random words match audio within 200ms.
-- Smoke-call Nemotron VL on a 2-min video clip, confirm it returns a visual description. *Verify:* description mentions a specific on-screen element.
+- Smoke-call NIM Nemotron VL on a 2-min video clip via `/v1/chat/completions` at `$NIM_BASE_URL`, confirm it returns a visual description. *Verify:* description mentions a specific on-screen element.
 
 **Dev B — UI scaffold with mock data**
 - Single HTML file, Tailwind CDN, dark mode, purple accent. *Verify:* opens via `file://`, no console errors.
@@ -66,10 +72,11 @@ Explicitly deferred to post-hackathon. Do not build these.
 
 ### Hour 3–6: Core functionality
 
-**Dev A — Scout agent**
-- Tool schemas defined for all 4 tools. *Verify:* JSON Schema validates, vLLM accepts them.
-- Scout system prompt: instructs model to return 5–10 candidates with self-scores in strict JSON. *Verify:* 3 runs on the same source each return parseable JSON with ≥5 candidates.
-- Timestamp validation: reject any candidate with timestamps outside source or words missing from transcript. *Verify:* unit test with deliberately bad candidates all get rejected.
+**Dev A — Scout function**
+- `configs/cutpilot.yml` scaffolded with `llms: _type: nim` block and empty `functions:` / `workflow:` placeholders. *Verify:* `nat run --config_file=configs/cutpilot.yml --input "ping"` loads the config without schema errors.
+- Scout registered as `@register_function(config_type=ScoutConfig)` returning a `CandidatesResult` Pydantic model. Internally calls the NIM VL endpoint once with the video + transcript. *Verify:* calling the function on a fixture returns a validated `CandidatesResult` with ≥5 entries — Pydantic raises if the model returns malformed JSON.
+- Scout system prompt: instructs model to return 5–10 candidates with self-scores in strict JSON (loaded from `prompts/scout.md`). *Verify:* 3 runs on the same source each return parseable JSON with ≥5 candidates; no free-text prose leaks through.
+- Timestamp validation: reject any candidate with timestamps outside source or words missing from transcript (validation happens inside the Scout function, before it returns). *Verify:* unit test with deliberately bad candidates all get rejected.
 
 **Dev B — Clip review cards**
 - Card component with thumbnail, hook title, rationale prose, 4 score bars, download button. *Verify:* card matches mockup, scores render as proportional bars.
@@ -81,10 +88,12 @@ Explicitly deferred to post-hackathon. Do not build these.
 **Integration sync at hour 6.** Dev A and Dev B exchange: real Scout output manifest, real clip mp4 for UI testing.
 
 **Dev A — Editor agent + tools**
+- Four tools registered via `@register_function`: `cut`, `crop_9_16_center`, `burn_captions`, `get_transcript_window`. Entry-point table added in `pyproject.toml` under `[project.entry-points.'nat.components']`. *Verify:* `nat info components` lists all four under the CutPilot package.
 - `cut` tool: ffmpeg with `-c copy` where possible. *Verify:* output duration within 100ms of requested, byte-identical content.
 - `crop_9_16_center` tool: ffmpeg crop filter. *Verify:* output is 1080x1920, center column matches source.
 - `burn_captions` tool: ffmpeg subtitles filter with basic styling. *Verify:* captions visible, timed correctly at spot checks.
-- Editor prompt: receives candidates, picks top 3, calls tools sequentially. *Verify:* full loop produces 3 clips with no overlap.
+- Editor declared in `configs/cutpilot.yml` as `_type: tool_calling_agent` with `tool_names: [cut, crop_9_16_center, burn_captions, get_transcript_window]` and `llm_name: nemotron_vl`. Prompt in `prompts/editor.md`. *Verify:* full loop produces 3 clips with no overlap.
+- Orchestrator declared as `workflow: _type: sequential_executor, tool_list: [scout, editor]`. *Verify:* `nat run --config_file=configs/cutpilot.yml --input <source>` runs Scout then Editor in order; session state is passed between steps.
 
 **Dev B — Reasoning trace panel**
 - Collapsible panel showing all Scout candidates with scores and rejection reasons. *Verify:* starts collapsed, `e` key toggles, expansion shows all candidates.
@@ -95,7 +104,7 @@ Explicitly deferred to post-hackathon. Do not build these.
 
 **Both devs.**
 - Dev A pipeline produces real output; Dev B's UI loads the real manifest. *Verify:* UI renders correctly with real pipeline output end to end.
-- Run on primary demo source (unedited, fresh input). *Verify:* 3 clips produced, all play, all have rationale.
+- Run on primary demo source: `cutpilot <source.mp4>` (which internally invokes the NAT workflow) and cross-check with `nat run --config_file=configs/cutpilot.yml --input <source.mp4>`. *Verify:* both entrypoints produce the same 3 clips and the same manifest.
 - Run on backup source. *Verify:* same result on a second source.
 - Pre-render outputs from both sources as fallback videos. *Verify:* fallbacks play from local file without running the pipeline.
 
@@ -128,7 +137,8 @@ If any of these is broken 2 hours before the pitch, switch to the pre-rendered b
 
 Tighter thresholds than the full PRD because there's no recovery time.
 
-- **Hour 4: Scout not returning parseable JSON reliably** → switch to heavily-structured prompt with JSON-mode forced decoding, or fall back to a simpler "score each of these 10 transcript windows" approach.
+- **Hour 1: Self-hosted NIM container on Brev won't start or can't pull** → flip `NIM_BASE_URL` to `https://integrate.api.nvidia.com/v1` and use `NVIDIA_API_KEY`. Hosted-NIM rate limits are the new failure mode; cache responses where possible.
+- **Hour 4: Scout not returning parseable JSON reliably** → tighten the Scout prompt's JSON contract and add a single retry on `pydantic.ValidationError` inside the Scout function; if that fails, fall back to a simpler "score each of these 10 transcript windows" approach.
 - **Hour 6: VL video inference above 3 minutes for a 20-min source** → stop passing full video. Sample frames at transcript cue points only.
 - **Hour 8: Editor cuts producing artifacts (drift, glitches)** → drop the `-c copy` optimization, re-encode everything. Slower but reliable.
 - **Hour 10: Integration not clean** → ship with static example manifest in UI, run pipeline offline, pre-render the live-demo flow.

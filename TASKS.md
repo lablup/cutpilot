@@ -9,16 +9,18 @@
 ## Phase 0 — Pre-hackathon prep
 
 ### Environment
-- [ ] Confirm GPU allocation on Backend.AI — *Verify:* `nvidia-smi` on allocated node shows one free H100 with >70GB free VRAM, reservation visible in Backend.AI UI for the full hackathon window.
-- [ ] Pre-pull Nemotron Nano 2 VL weights — *Verify:* model directory exists locally, SHA checksum matches Hugging Face, total size matches expected ~24GB.
+- [ ] Provision Brev H100 Launchable — *Verify:* `brev ls` lists the instance as running, `brev shell <name>` succeeds, `nvidia-smi` on the instance shows a free H100 with >70GB free VRAM, instance lifetime covers the full hackathon window.
+- [ ] Export NGC and NIM credentials on the Brev instance — *Verify:* `echo $NGC_API_KEY` and `echo $NVIDIA_API_KEY` both non-empty, `docker login nvcr.io -u '$oauthtoken' -p $NGC_API_KEY` succeeds.
+- [ ] Pull the Nemotron Nano 2 VL NIM container — *Verify:* `docker pull nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>` completes; `docker images` shows the image; tag recorded in `.env.example`.
+- [ ] Launch the NIM container with GPU access — *Verify:* `docker run --gpus all -p 8000:8000 -e NGC_API_KEY nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>` starts; `curl http://localhost:8000/v1/models` returns `nvidia/nemotron-nano-12b-v2-vl`; container logs show EVS initialized.
+- [ ] Validate hosted-NIM fallback path — *Verify:* `curl -H "Authorization: Bearer $NVIDIA_API_KEY" https://integrate.api.nvidia.com/v1/models` lists the same model; a chat-completion request against the hosted endpoint returns a response.
 - [ ] Pre-pull faster-whisper large-v3 weights — *Verify:* weights load from local path without network access.
-- [ ] Verify vLLM version compatible with Nemotron Nano 2 VL — *Verify:* vLLM launches the model without errors and logs confirm EVS is initialized.
-- [ ] Set up base Python env with ffmpeg, yt-dlp, faster-whisper, PySceneDetect — *Verify:* `python -c "import all_deps"` succeeds, `ffmpeg -version` returns 6.0+.
-- [ ] Install Google ADK and LiteLLM — *Verify:* `pip show google-adk` returns a version, `from google.adk.agents import LlmAgent` imports without error.
-- [ ] Configure vLLM with tool-calling flags — *Verify:* vLLM started with `--enable-auto-tool-choice` and a working `--tool-call-parser`; a test tool call through ADK's `LiteLlm` wrapper executes successfully.
-- [ ] Smoke test vLLM with a text-only prompt — *Verify:* prompt "What is 2+2?" returns a sensible response in under 3s.
-- [ ] Smoke test Nemotron Nano 2 VL with a single image — *Verify:* model describes a known test image (e.g., a stop sign) and correctly identifies it.
-- [ ] Smoke test Nemotron Nano 2 VL with a 30-second video — *Verify:* model produces a description mentioning motion or scene change across the clip, inference under 15s.
+- [ ] Set up base Python env with ffmpeg, yt-dlp, faster-whisper — *Verify:* `python -c "import faster_whisper, ffmpeg, yt_dlp"` succeeds, `ffmpeg -version` returns 6.0+.
+- [ ] Install NeMo Agent Toolkit — *Verify:* `pip install 'nvidia-nat[langchain,mcp]'` succeeds; `nat --help` lists `run`, `serve`, `mcp`, `info`; `python -c "from nat.cli.register_workflow import register_function"` imports without error.
+- [ ] Smoke-test NIM tool calling through NAT — *Verify:* a minimal `configs/smoke.yml` with one registered tool and a `tool_calling_agent` runs via `nat run --config_file=configs/smoke.yml --input "call the test tool"` and the tool is actually invoked (`nat info components` lists it first).
+- [ ] Smoke test NIM with a text-only prompt — *Verify:* prompt "What is 2+2?" returns a sensible response in under 3s against `$NIM_BASE_URL`.
+- [ ] Smoke test Nemotron Nano 2 VL with a single image — *Verify:* model describes a known test image (e.g., a stop sign) and correctly identifies it; image passed as a URL in the chat-completion request body.
+- [ ] Smoke test Nemotron Nano 2 VL with a 30-second video — *Verify:* model produces a description mentioning motion or scene change across the clip, inference under 15s; video passed as a URL (or `file://` path) to the NIM endpoint.
 
 ### Source material
 - [ ] Curate 5 candidate source videos — *Verify:* 5 mp4 files on disk, durations logged, languages labeled, all playable end-to-end with audio.
@@ -46,8 +48,8 @@ Goal: End-to-end pipeline produces one clip from a 10-minute video. Ugly output 
 ### Perception wiring
 - [ ] Run Whisper on demuxed audio, persist transcript JSON — *Verify:* JSON contains word-level entries with start/end/text, total word count within 10% of manual count on a 2-min sample.
 - [ ] Verify timestamp accuracy — *Verify:* pick 5 random words, confirm each timestamp matches actual audio within 200ms.
-- [ ] Pass a short video clip to Nemotron Nano 2 VL — *Verify:* returned description mentions at least one specific visual element present in the clip.
-- [ ] Confirm EVS is active — *Verify:* vLLM logs show EVS token pruning stats, VRAM usage on a 5-min video input stays under 40GB.
+- [ ] Pass a short video clip to Nemotron Nano 2 VL via NIM — *Verify:* returned description mentions at least one specific visual element present in the clip; request goes through `$NIM_BASE_URL/chat/completions`.
+- [ ] Confirm EVS is active on the NIM container — *Verify:* NIM container logs show EVS token pruning stats, VRAM usage on a 5-min video input stays under 40GB.
 
 ### Stub tool execution
 - [ ] Implement `cut` function — *Verify:* given (10s, 20s), output is exactly 10s long, byte-identical to source for those seconds when using `-c copy`.
@@ -67,19 +69,19 @@ Goal: End-to-end pipeline produces one clip from a 10-minute video. Ugly output 
 
 Goal: Reasoning replaces hardcoded timestamps. Scout proposes, Critic filters, Editor commits.
 
-### Agent scaffolding (Google ADK)
-- [ ] Shared `LiteLlm` instance in `agents/llm.py` pointing at vLLM endpoint — *Verify:* Scout and Editor both import the same instance; changing endpoint requires a one-line edit.
-- [ ] Implement 4 tools as plain Python functions with type hints + docstrings — *Verify:* each function passes its own unit test; ADK auto-wraps via `FunctionTool` at agent instantiation.
+### Agent scaffolding (NeMo Agent Toolkit)
+- [ ] Author `configs/cutpilot.yml` with an `llms:` block (`_type: nim`, `model_name: nvidia/nemotron-nano-12b-v2-vl`, `base_url: ${NIM_BASE_URL:-http://localhost:8000/v1}`, `api_key: ${NVIDIA_API_KEY}`) — *Verify:* `nat run --config_file=configs/cutpilot.yml --input "ping"` loads the config without schema errors; endpoint/model changes are a one-line YAML edit.
+- [ ] Implement 4 tools as plain Python functions with type hints + docstrings, each wrapped by `@register_function(config_type=...)` — *Verify:* each function passes its own unit test; `nat info components` lists all four; the `[project.entry-points.'nat.components']` table in `pyproject.toml` points at them.
 - [ ] Define `CandidatesResult` Pydantic model in `models.py` — *Verify:* model matches the schema shape; validates a hand-written example.
-- [ ] Instantiate Scout as `LlmAgent(output_schema=CandidatesResult, ...)` — *Verify:* running the agent returns parseable JSON matching the schema, no free-text prose.
-- [ ] Instantiate Editor as `LlmAgent(tools=TOOLS, ...)` — *Verify:* a test run triggers at least one tool call with valid arguments.
-- [ ] Compose Scout → Editor via `SequentialAgent` in `agents/orchestrator.py` — *Verify:* running the sequential agent on a sample produces Scout output then Editor cuts, in order, with session state passed between them.
-- [ ] Expose `root_agent` from `agents/__init__.py` — *Verify:* `adk web` can discover and load the agent graph.
+- [ ] Implement Scout as a `@register_function` returning `CandidatesResult` (no tools; function signature *is* the schema) — *Verify:* running Scout alone via `nat run --config_file=configs/scout_only.yml --input <fixture>` returns a validated `CandidatesResult` with ≥5 entries; no free-text prose leaks; `pydantic.ValidationError` surfaces any malformed model output.
+- [ ] Declare Editor in `configs/cutpilot.yml` as `_type: tool_calling_agent` with `llm_name: nemotron_vl` and `tool_names: [cut, crop_9_16, burn_captions, transcript_window]` — *Verify:* a test run triggers at least one tool call with valid arguments.
+- [ ] Compose Scout → Editor via `workflow: _type: sequential_executor, tool_list: [scout, editor]` — *Verify:* running the workflow on a sample produces Scout output then Editor cuts, in order, with state passed between them.
+- [ ] Verify workflow is servable over HTTP — *Verify:* `nat serve --config_file=configs/cutpilot.yml` binds a FastAPI endpoint; the generated OpenAPI schema exposes the Scout input/output Pydantic models.
 
 ### Scout role
 - [ ] Draft Scout system prompt in `prompts/scout.md` — *Verify:* prompt is under 2000 tokens, explicitly lists candidate format, passes sanity read by a second person.
-- [ ] Collect 5–10 candidates from Scout via ADK `output_schema` — *Verify:* ADK returns a validated `CandidatesResult` instance with ≥5 entries, all with start_ts < end_ts, durations in 20–90s range.
-- [ ] Validate candidate timestamps against transcript — *Verify:* every proposed start_ts and end_ts falls within the source duration; words exist at those timestamps in the transcript.
+- [ ] Collect 5–10 candidates from the Scout function (NIM VL call + Pydantic parse) — *Verify:* the function returns a validated `CandidatesResult` instance with ≥5 entries, all with start_ts < end_ts, durations in 20–90s range; malformed model output raises `ValidationError` rather than returning silently.
+- [ ] Validate candidate timestamps against transcript inside the Scout function, before returning — *Verify:* every proposed start_ts and end_ts falls within the source duration; words exist at those timestamps in the transcript.
 - [ ] Self-scoring on all 4 rubric axes in the same pass — *Verify:* every candidate has integer scores 1–5 for hook, self-contained, length-fit, visual-fit; no missing fields.
 
 ### Critic role
@@ -94,8 +96,8 @@ Goal: Reasoning replaces hardcoded timestamps. Scout proposes, Critic filters, E
 - [ ] Produce final 3-clip plan — *Verify:* plan has exactly 3 clips, no time overlaps between clips, all within source duration.
 
 ### Integration
-- [ ] Run full Scout → Critic → Editor on one source — *Verify:* end-to-end trace log shows all three stages completing, 3 final clips emitted.
-- [ ] Capture full reasoning trace — *Verify:* log file contains every agent turn, every tool call, every intermediate output, no redactions.
+- [ ] Run full Scout → Editor workflow on one source via `nat run --config_file=configs/cutpilot.yml --input <source>` — *Verify:* end-to-end trace shows both stages completing, 3 final clips emitted.
+- [ ] Capture full reasoning trace from NAT's OpenTelemetry output — *Verify:* trace contains the Scout NIM request/response and every Editor tool call with inputs, outputs, and duration; no redactions.
 - [ ] Verify three distinct clips — *Verify:* manual review confirms clips are about different moments, not minor variations of the same segment.
 
 ---

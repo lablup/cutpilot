@@ -6,12 +6,12 @@ Built for NVIDIA Nemotron Developer Days Seoul 2026 — Track A (Creative Agenti
 
 ## How it works
 
-Two agents, both **Nemotron Nano 2 VL** with different prompts, orchestrated by **Google ADK**:
+Two steps, both backed by **Nemotron Nano 2 VL** served by **NVIDIA NIM**, orchestrated by the **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`) via a single YAML workflow (`configs/cutpilot.yml`):
 
-- **Scout** reads the full video and transcript in one pass, proposes 5–10 candidate moments, and self-scores each on four axes (hook strength, self-containedness, length fit, visual fit).
-- **Editor** picks the top three, validates timestamps against the transcript, and calls a small set of tools (`cut`, `crop_9_16`, `burn_captions`, `transcript_window`) to materialize the clips.
+- **Scout** reads the full video and transcript in one pass, proposes 5–10 candidate moments, and self-scores each on four axes (hook strength, self-containedness, length fit, visual fit). Implemented as a NAT `@register_function` whose return type is the Pydantic schema.
+- **Editor** (NAT `tool_calling_agent`) picks the top three, validates timestamps against the transcript, and calls a small set of tools (`cut`, `crop_9_16`, `burn_captions`, `transcript_window`) to materialize the clips.
 
-Perception is handled by **Whisper large-v3** (word-level timestamps) running alongside Nemotron Nano 2 VL on a single GPU via vLLM.
+Perception is handled by **Whisper large-v3** (word-level timestamps) running alongside the NIM container on a single **NVIDIA Brev** H100 Launchable. Hosted NIM at `build.nvidia.com` (`NVIDIA_API_KEY`) is the documented fallback.
 
 Output is three `.mp4` files + per-clip JSON manifests, surfaced through a single-file HTML review UI that shows before/after, rationale, rubric scores, and the full agent reasoning trace.
 
@@ -29,9 +29,9 @@ Hackathon-era scaffold. Planning documents are authoritative until the code land
 
 - Python 3.11+
 - `ffmpeg` 6.0+ on `PATH`
-- A single H100-class GPU (or equivalent) with ≥70 GB VRAM
-- vLLM serving Nemotron Nano 2 VL, launched with `--enable-auto-tool-choice` and a compatible `--tool-call-parser`
-- faster-whisper large-v3 weights available locally
+- An **NVIDIA Brev** H100 Launchable (≥70 GB VRAM), provisioned via the Brev CLI
+- NVIDIA NIM container `nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>` running on the Brev instance (pulled with `NGC_API_KEY`), or hosted NIM at `build.nvidia.com` with `NVIDIA_API_KEY` as fallback
+- faster-whisper large-v3 weights available locally on the Brev instance
 
 ## Install
 

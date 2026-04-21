@@ -39,8 +39,7 @@ dependencies = [
     "faster-whisper>=1.0",       # Whisper with word-level timestamps
 
     # Agent framework
-    "google-adk>=1.0",           # defines agents, tools, multi-agent workflows
-    "litellm>=1.50",             # bridges ADK to vLLM (hosted_vllm/* model strings)
+    "nvidia-nat[langchain,mcp]>=1.0",  # NeMo Agent Toolkit: agents, tools, workflows, MCP
 
     # Media
     "ffmpeg-python>=0.2",        # Python bindings for ffmpeg invocation
@@ -67,6 +66,16 @@ Homepage = "https://github.com/lablup/cutpilot"
 # Single CLI entry point — SSoT for invocation.
 [project.scripts]
 cutpilot = "cutpilot.cli:app"
+
+# NeMo Agent Toolkit component registration. `nat` reads this table at install
+# time to discover `@register_function` components. If a tool doesn't show up
+# in `nat info components`, reinstall the package (`pip install -e .`).
+[project.entry-points."nat.components"]
+cutpilot_scout = "cutpilot.agents.scout:register"
+cutpilot_cut = "cutpilot.tools.cut:register"
+cutpilot_crop_9_16 = "cutpilot.tools.crop:register"
+cutpilot_burn_captions = "cutpilot.tools.captions:register"
+cutpilot_transcript_window = "cutpilot.tools.transcript_window:register"
 
 # ---------------------------------------------------------------------------
 # Build configuration
@@ -129,8 +138,7 @@ module = [
     "faster_whisper.*",
     "ffmpeg.*",
     "yt_dlp.*",
-    "google.adk.*",
-    "litellm.*",
+    "nat.*",
 ]
 ignore_missing_imports = true
 
