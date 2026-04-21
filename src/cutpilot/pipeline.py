@@ -13,7 +13,7 @@ import structlog
 
 from cutpilot import paths, persistence
 from cutpilot.clients.ffmpeg import extract_audio
-from cutpilot.clients.whisper_riva import transcribe
+from cutpilot.clients.whisper import transcribe
 from cutpilot.models import ClipManifest, Transcript
 
 log = structlog.get_logger()
@@ -28,7 +28,7 @@ async def run_pipeline(source: Path, run_id: str) -> list[ClipManifest]:
     await extract_audio(source, wav_path)
     log.info("pipeline.audio_extracted", path=str(wav_path))
 
-    # 2. Perception — Whisper-Large via Riva
+    # 2. Perception — Whisper-Large via NIM (OpenAI-compat /v1/audio/transcriptions)
     transcript: Transcript = await transcribe(audio_path=wav_path, source_path=source)
     persistence.save(transcript, paths.transcript_json_path(run_id))
     log.info("pipeline.transcribed", segments=len(transcript.segments))
