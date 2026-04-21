@@ -64,7 +64,7 @@ mypy src                        # strict type check
 
 ## Authors
 
-Sergey Leksikov · Minje Kim
+Sergey Leksikov · Minjae Kim
 
 ## License
 
