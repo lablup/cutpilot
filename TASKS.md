@@ -236,6 +236,24 @@ Goal: Win the showcase. Clear narrative, crisp demo, no dead air.
 
 ---
 
+## Extended ffmpeg tool set (outside sprint scope)
+
+Agent-facing video editing primitives beyond the four sprint tools. Not wired into the Editor's `tool_names` in `configs/cutpilot.yml`; available as NAT components for any future workflow.
+
+### Implementation
+- [x] Add `ProbeInfo` Pydantic model in `models.py` — *Verify:* `ProbeInfo` defined with optional `duration/width/height/video_codec/audio_codec/fps/size_bytes` fields and `extra="forbid"`.
+- [x] Extend `clients/ffmpeg.py` with `concat_copy`, `concat_reencode`, `mux_av`, `export_standard`, `probe_media`, `_run_probe`, pure helpers `_format_concat_listfile` and `_narrow_probe` — *Verify:* each function is async (except pure helpers), goes through the existing `_run` for ffmpeg and `_run_probe` for ffprobe.
+- [x] Add tool modules `splice.py`, `merge.py`, `save.py`, `probe.py` under `src/cutpilot/tools/` matching the `cut.py` template — *Verify:* each module exposes `<Name>Config(FunctionBaseConfig, name="cutpilot_<name>")` and a `register` async-generator yielding `FunctionInfo.from_fn(...)`.
+- [x] Register new tools in `pyproject.toml` `[project.entry-points."nat.components"]` and `tools/__init__.py::TOOLS` — *Verify:* `pip install -e .` then `nat info components` lists `cutpilot_splice`, `cutpilot_merge`, `cutpilot_save`, `cutpilot_probe`.
+
+### Tests
+- [x] Build `tests/` scaffolding with `conftest.py` fixtures (`tiny_video`, `tiny_video_noaudio`, `tiny_audio`) generated via `ffmpeg lavfi` — *Verify:* fixtures resolve to playable files inside `tmp_path_factory`; absent `ffmpeg` skips integration-layer tests cleanly.
+- [x] Unit tests for pure helpers — *Verify:* `pytest -m "not integration"` passes with 11 tests covering `_format_concat_listfile` escaping and `_narrow_probe` mapping from canned ffprobe dicts, with no ffmpeg invocation.
+- [x] Tool-wrapper smoke tests — *Verify:* `tests/integration/test_tool_wrappers.py` drives each of `splice`/`merge`/`save`/`probe` via its `async with register(...)` context and `FunctionInfo.single_fn`, validating the entire registration plumbing end-to-end.
+- [x] Integration tests against real ffmpeg — *Verify:* `pytest -m integration` runs 11 tests (7 client primitives + 4 tool wrappers) against `tiny_video` fixtures; `concat_copy` joined duration ≈ 6s, `mux_av` probe reports both streams, `export_standard` probe reports `h264` + `aac`, `probe_media` reports width=320 height=240 fps≈30.
+
+---
+
 ## Risks that should trigger replanning
 
 Each risk has a detection signal and a fallback plan. If detected, stop and execute the fallback before continuing.
