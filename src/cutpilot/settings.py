@@ -19,15 +19,16 @@ class Settings(BaseSettings):
 
     # --- NVIDIA NIM: text reasoning (Editor) ---
     nim_text_base_url: str = "http://0.0.0.0:8000/v1"
-    nim_text_model: str = "nvidia/nemotron-3-nano-30b-a3b"
+    nim_text_model: str = "nvidia/nemotron-3-nano"
 
     # --- NVIDIA NIM: vision-language (Scout + on-demand frame analysis) ---
     nim_vl_base_url: str = "http://0.0.0.0:9000/v1"
     nim_vl_model: str = "nvidia/nemotron-nano-12b-v2-vl"
 
-    # --- NVIDIA Riva: Whisper-Large ASR ---
-    riva_server: str = "0.0.0.0:8100"
-    whisper_language: str = "en-US"
+    # --- NVIDIA NIM: Whisper-Large ASR (OpenAI-compatible /v1/audio/transcriptions) ---
+    whisper_base_url: str = "http://0.0.0.0:8100/v1"
+    whisper_model: str = "whisper-large-v3:ofl-rmir-26.01.1"
+    whisper_language: str = "en"  # ISO-639-1, as OpenAI audio API expects
 
     # --- Credentials ---
     nvidia_api_key: str = ""
