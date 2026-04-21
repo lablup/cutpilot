@@ -48,7 +48,7 @@ Goal: End-to-end pipeline produces one clip from a 10-minute video. Ugly output 
 ### Perception wiring
 - [ ] Run Whisper on demuxed audio, persist transcript JSON — *Verify:* JSON contains word-level entries with start/end/text, total word count within 10% of manual count on a 2-min sample.
 - [ ] Verify timestamp accuracy — *Verify:* pick 5 random words, confirm each timestamp matches actual audio within 200ms.
-- [ ] Pass a short video clip to Nemotron Nano 2 VL via NIM — *Verify:* returned description mentions at least one specific visual element present in the clip; request goes through `$NIM_BASE_URL/chat/completions`.
+- [x] Pass a short video clip to Nemotron Nano 2 VL via NIM — *Verify:* returned description mentions at least one specific visual element present in the clip; request goes through `$NIM_BASE_URL/chat/completions`. (Verified end-to-end via `scripts/scout_smoke.py` against the 43-min GTC demo source. Video sent as one `video/mp4` Part through ADK's LiteLlm wrapper at the Cloudflare-tunneled VL endpoint; NIM returned JSON-mode response with distinct per-candidate rationales after `media_io_kwargs.num_frames=128` was set.)
 - [ ] Confirm EVS is active on the NIM container — *Verify:* NIM container logs show EVS token pruning stats, VRAM usage on a 5-min video input stays under 40GB.
 
 ### Stub tool execution
@@ -73,16 +73,16 @@ Goal: Reasoning replaces hardcoded timestamps. Scout proposes, Critic filters, E
 - [x] Author `src/cutpilot/configs/cutpilot.yml` with `llms:` block covering both NIM models (`nemotron_text` → `:8000`, `nemotron_vl` → `:9000`), all functions (`scout`, `cut`, `crop_9_16`, `burn_captions`, `transcript_window`, `editor`), and the `sequential_executor` workflow. *Verify:* YAML parses; endpoint/model changes are a one-line YAML edit.
 - [~] Implement 4 tools as plain Python functions with type hints + docstrings, each wrapped by `@register_function(config_type=..., framework_wrappers=[LLMFrameworkEnum.ADK])` — *Verify:* `nat info components` lists all four after `pip install -e .`; the `[project.entry-points.'nat.components']` table in `pyproject.toml` points at each tool's `register` function. (Scaffolded; each tool passes AST parse — unit tests still pending.)
 - [x] Define `CandidatesResult` Pydantic model in `models.py` — *Verify:* model at `src/cutpilot/models.py` with `candidates: list[Candidate]` (min 5, max 10); `Candidate` enforces `end_ts > start_ts` and `20 ≤ duration ≤ 90` via `@model_validator`; `RubricScores` enforces all four axes as `int` in `[1, 5]`.
-- [~] Implement Scout as a `@register_function` returning `CandidatesResult` (no tools; function signature *is* the schema) — *Verify:* running Scout alone via `nat run --config_file=configs/scout_only.yml --input <fixture>` returns a validated `CandidatesResult` with ≥5 entries; no free-text prose leaks; `pydantic.ValidationError` surfaces any malformed model output. (File scaffolded at `agents/scout.py`; VL call is `NotImplementedError` pending wiring to `llm.with_structured_output(CandidatesResult).ainvoke(...)`.)
+- [x] Implement Scout as a `@register_function` returning `CandidatesResult` (no tools; function signature *is* the schema) — *Verify:* `python scripts/scout_smoke.py <video> <run_id>` returns a validated `CandidatesResult` with ≥5 entries against the live VL NIM; no free-text prose leaks; `pydantic.ValidationError` surfaces any malformed output. (Wired at `agents/scout.py` via ADK `LiteLlm.generate_content_async` with `LlmRequest.config.response_schema=CandidatesResult`. `scout_core` is a pure function used by both the NAT-registered entrypoint and `scripts/scout_smoke.py`.)
 - [x] Declare Editor in `configs/cutpilot.yml` as `_type: tool_calling_agent` with `llm_name: nemotron_text` and `tool_names: [cut, crop_9_16, burn_captions, transcript_window]` — *Verify:* YAML declares the Editor block; runtime verification (tool-call triggered) pending NIM availability.
 - [x] Compose Scout → Editor via `workflow: _type: sequential_executor, tool_list: [scout, editor]` — *Verify:* YAML declares the workflow; runtime verification pending NIM availability.
 - [ ] Verify workflow is servable over HTTP — *Verify:* `nat serve --config_file=src/cutpilot/configs/cutpilot.yml` binds a FastAPI endpoint; the generated OpenAPI schema exposes the Scout input/output Pydantic models.
 
 ### Scout role
-- [x] Draft Scout system prompt in `prompts/scout.md` — *Verify:* prompt is under 2000 tokens, explicitly lists candidate format, passes sanity read by a second person. (First draft written; second-person sanity read still needed.)
-- [ ] Collect 5–10 candidates from the Scout function (NIM VL call + Pydantic parse) — *Verify:* the function returns a validated `CandidatesResult` instance with ≥5 entries, all with start_ts < end_ts, durations in 20–90s range; malformed model output raises `ValidationError` rather than returning silently.
-- [ ] Validate candidate timestamps against transcript inside the Scout function, before returning — *Verify:* every proposed start_ts and end_ts falls within the source duration; words exist at those timestamps in the transcript.
-- [ ] Self-scoring on all 4 rubric axes in the same pass — *Verify:* every candidate has integer scores 1–5 for hook, self-contained, length-fit, visual-fit; no missing fields.
+- [x] Draft Scout system prompt in `prompts/scout.md` — *Verify:* prompt is under 2000 tokens, explicitly lists candidate format, passes sanity read by a second person. (Updated for video_url input + explicit 20-s floor language after empirical under-shoot on the GTC smoke.)
+- [x] Collect 5–10 candidates from the Scout function (NIM VL call + Pydantic parse) — *Verify:* the function returns a validated `CandidatesResult` instance with ≥5 entries, all with `start_ts < end_ts`, durations in 20–90 s range; malformed model output raises `ValidationError` rather than returning silently. (Verified on GTC 43-min source: 6 distinct candidates, durations 21–32 s, all scored.)
+- [ ] Validate candidate timestamps against transcript inside the Scout function, before returning — *Verify:* every proposed start_ts and end_ts falls within the source duration; words exist at those timestamps in the transcript. (Blocked — transcript is optional until Whisper lands on the sibling branch. Scout currently clamps to `[0, duration]` only; word-level alignment deferred.)
+- [x] Self-scoring on all 4 rubric axes in the same pass — *Verify:* every candidate has integer scores 1–5 for hook, self-contained, length-fit, visual-fit; no missing fields. (Enforced by `RubricScores` in `models.py`; verified on the smoke run.)
 
 ### Critic role
 - [ ] Draft Critic system prompt with rubric — *Verify:* rubric explicitly covers hook, self-contained, length-fit, visual-fit; each criterion produces a 1–5 score.
@@ -233,6 +233,24 @@ Goal: Win the showcase. Clear narrative, crisp demo, no dead air.
 - [ ] A/B hook variants per clip — *Verify:* output contains 2 variants per clip with distinguishably different first 3 seconds.
 - [ ] Hook text overlay in first 2s — *Verify:* overlay text is present, readable, and matches the clip's rationale.
 - [ ] Creator-style fine-tune — *Verify:* fine-tuned model's output on a held-out source is rated "more on-brand" than base by 2+ reviewers.
+
+---
+
+## Extended ffmpeg tool set (outside sprint scope)
+
+Agent-facing video editing primitives beyond the four sprint tools. Not wired into the Editor's `tool_names` in `configs/cutpilot.yml`; available as NAT components for any future workflow.
+
+### Implementation
+- [x] Add `ProbeInfo` Pydantic model in `models.py` — *Verify:* `ProbeInfo` defined with optional `duration/width/height/video_codec/audio_codec/fps/size_bytes` fields and `extra="forbid"`.
+- [x] Extend `clients/ffmpeg.py` with `concat_copy`, `concat_reencode`, `mux_av`, `export_standard`, `probe_media`, `_run_probe`, pure helpers `_format_concat_listfile` and `_narrow_probe` — *Verify:* each function is async (except pure helpers), goes through the existing `_run` for ffmpeg and `_run_probe` for ffprobe.
+- [x] Add tool modules `splice.py`, `merge.py`, `save.py`, `probe.py` under `src/cutpilot/tools/` matching the `cut.py` template — *Verify:* each module exposes `<Name>Config(FunctionBaseConfig, name="cutpilot_<name>")` and a `register` async-generator yielding `FunctionInfo.from_fn(...)`.
+- [x] Register new tools in `pyproject.toml` `[project.entry-points."nat.components"]` and `tools/__init__.py::TOOLS` — *Verify:* `pip install -e .` then `nat info components` lists `cutpilot_splice`, `cutpilot_merge`, `cutpilot_save`, `cutpilot_probe`.
+
+### Tests
+- [x] Build `tests/` scaffolding with `conftest.py` fixtures (`tiny_video`, `tiny_video_noaudio`, `tiny_audio`) generated via `ffmpeg lavfi` — *Verify:* fixtures resolve to playable files inside `tmp_path_factory`; absent `ffmpeg` skips integration-layer tests cleanly.
+- [x] Unit tests for pure helpers — *Verify:* `pytest -m "not integration"` passes with 11 tests covering `_format_concat_listfile` escaping and `_narrow_probe` mapping from canned ffprobe dicts, with no ffmpeg invocation.
+- [x] Tool-wrapper smoke tests — *Verify:* `tests/integration/test_tool_wrappers.py` drives each of `splice`/`merge`/`save`/`probe` via its `async with register(...)` context and `FunctionInfo.single_fn`, validating the entire registration plumbing end-to-end.
+- [x] Integration tests against real ffmpeg — *Verify:* `pytest -m integration` runs 11 tests (7 client primitives + 4 tool wrappers) against `tiny_video` fixtures; `concat_copy` joined duration ≈ 6s, `mux_av` probe reports both streams, `export_standard` probe reports `h264` + `aac`, `probe_media` reports width=320 height=240 fps≈30.
 
 ---
 

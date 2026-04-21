@@ -59,6 +59,14 @@ def whisper_chunks_dir(run_id: str) -> Path:
     return work_dir(run_id) / "whisper_chunks"
 
 
+def frames_dir(run_id: str) -> Path:
+    return work_dir(run_id) / "frames"
+
+
+def vl_video_path(run_id: str) -> Path:
+    return work_dir(run_id) / "video_vl.mp4"
+
+
 def transcript_json_path(run_id: str) -> Path:
     return work_dir(run_id) / "transcript.json"
 
