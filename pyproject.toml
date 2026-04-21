@@ -184,6 +184,7 @@ addopts = [
 markers = [
     "integration: slow end-to-end tests (deselect with '-m \"not integration\"')",
     "gpu: tests that require a GPU (deselect with '-m \"not gpu\"')",
+    "e2e: full-pipeline tests requiring all three NIMs (deselect with '-m \"not e2e\"')",
 ]
 
 [tool.coverage.run]
