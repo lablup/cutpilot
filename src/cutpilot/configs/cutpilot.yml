@@ -1,0 +1,75 @@
+# CutPilot — NeMo Agent Toolkit workflow.
+#
+# Three NIM services:
+#   - Text reasoning (Editor):        nvidia/nemotron-3-nano-30b-a3b  @  :8000
+#   - Vision-language (Scout):        nvidia/nemotron-nano-12b-v2-vl  @  :9000
+#   - Riva Whisper-Large (ASR):       NOT here — it's a gRPC client called from
+#                                     `pipeline.py` (see `clients/whisper_riva.py`).
+#
+# Run:
+#   nat run   --config_file=src/cutpilot/configs/cutpilot.yml --input <source.mp4>
+#   nat serve --config_file=src/cutpilot/configs/cutpilot.yml    # FastAPI over HTTP
+#
+# All endpoints / keys come from `.env` via `settings.py`. Change an endpoint by
+# editing this file — do not hard-code URLs anywhere in Python.
+
+general:
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: info
+
+llms:
+  # Text reasoning + tool calling. Editor uses this.
+  nemotron_text:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-30b-a3b
+    base_url: ${NIM_TEXT_BASE_URL:-http://0.0.0.0:8000/v1}
+    api_key: ${NVIDIA_API_KEY:-dummy}
+    temperature: 0.0
+
+  # Vision-language for video/image analysis. Scout uses this.
+  nemotron_vl:
+    _type: nim
+    model_name: nvidia/nemotron-nano-12b-v2-vl
+    base_url: ${NIM_VL_BASE_URL:-http://0.0.0.0:9000/v1}
+    api_key: ${NVIDIA_API_KEY:-dummy}
+    temperature: 0.2
+
+functions:
+  # Scout — @register_function returning CandidatesResult. No tools.
+  scout:
+    _type: cutpilot_scout
+    llm: nemotron_vl
+
+  # Editor tools — registered Python functions; NAT derives schemas from signatures.
+  cut:
+    _type: cutpilot_cut
+  crop_9_16:
+    _type: cutpilot_crop_9_16
+  burn_captions:
+    _type: cutpilot_burn_captions
+  transcript_window:
+    _type: cutpilot_transcript_window
+
+  # Editor — NAT's native tool_calling_agent. Only component with write access.
+  editor:
+    _type: tool_calling_agent
+    llm_name: nemotron_text
+    tool_names:
+      - cut
+      - crop_9_16
+      - burn_captions
+      - transcript_window
+    description: >
+      Pick the top 3 Scout candidates by composite rubric score, validate timestamps
+      against the transcript, then call tools to cut, crop to 9:16, and burn captions.
+      Emit exactly 3 non-overlapping clips.
+
+# Scout → Editor in order.
+workflow:
+  _type: sequential_executor
+  tool_list:
+    - scout
+    - editor
