@@ -87,3 +87,9 @@ Before implementing anything, check `SPRINT.md` "What we cut from the full PRD".
 - **ffmpeg `-c copy` producing drift** — first fallback is to re-encode, don't chase the copy optimization.
 - **NIM endpoint 401 / 429** — the `llms:` block references `${NVIDIA_API_KEY}`; if it's unset or expired, self-hosted NIM on Brev gives a connection error and hosted NIM gives 401. `NIM_BASE_URL` is the one-knob switch between the two.
 - **`@register_function` not discovered** — if `nat info components` doesn't list a CutPilot tool, the `[project.entry-points.'nat.components']` table in `pyproject.toml` is missing or the package wasn't reinstalled (`pip install -e .`). Entry-points are read at install time, not at import time.
+
+Docs for NAT: /Users/sergeyleksikov/Documents/GitHub/nvidia_repos/NeMo-Agent-Toolkit/docs
+
+Examples for NAT: /Users/sergeyleksikov/Documents/GitHub/nvidia_repos/NeMo-Agent-Toolkit/examples
+
+
