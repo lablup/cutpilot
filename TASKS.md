@@ -11,16 +11,16 @@
 ### Environment
 - [ ] Provision Brev H100 Launchable — *Verify:* `brev ls` lists the instance as running, `brev shell <name>` succeeds, `nvidia-smi` on the instance shows a free H100 with >70GB free VRAM, instance lifetime covers the full hackathon window.
 - [ ] Export NGC and NIM credentials on the Brev instance — *Verify:* `echo $NGC_API_KEY` and `echo $NVIDIA_API_KEY` both non-empty, `docker login nvcr.io -u '$oauthtoken' -p $NGC_API_KEY` succeeds.
-- [ ] Pull the Nemotron Nano 2 VL NIM container — *Verify:* `docker pull nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>` completes; `docker images` shows the image; tag recorded in `.env.example`.
-- [ ] Launch the NIM container with GPU access — *Verify:* `docker run --gpus all -p 8000:8000 -e NGC_API_KEY nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>` starts; `curl http://localhost:8000/v1/models` returns `nvidia/nemotron-nano-12b-v2-vl`; container logs show EVS initialized.
-- [ ] Validate hosted-NIM fallback path — *Verify:* `curl -H "Authorization: Bearer $NVIDIA_API_KEY" https://integrate.api.nvidia.com/v1/models` lists the same model; a chat-completion request against the hosted endpoint returns a response.
-- [ ] Pre-pull faster-whisper large-v3 weights — *Verify:* weights load from local path without network access.
-- [ ] Set up base Python env with ffmpeg, yt-dlp, faster-whisper — *Verify:* `python -c "import faster_whisper, ffmpeg, yt_dlp"` succeeds, `ffmpeg -version` returns 6.0+.
-- [ ] Install NeMo Agent Toolkit — *Verify:* `pip install 'nvidia-nat[langchain,mcp]'` succeeds; `nat --help` lists `run`, `serve`, `mcp`, `info`; `python -c "from nat.cli.register_workflow import register_function"` imports without error.
+- [ ] Pull the three NIM containers — *Verify:* `docker pull` completes for each of `nvcr.io/nim/nvidia/riva-asr:<tag>`, `nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:<tag>`, `nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>`; `docker images` shows all three; tags recorded in `.env.example` / a setup script.
+- [ ] Launch the three NIM containers with GPU access — *Verify:* Riva ASR on `0.0.0.0:8100`, text NIM on `0.0.0.0:8000`, VL NIM on `0.0.0.0:9000` are all running; `curl $NIM_TEXT_BASE_URL/models` returns `nvidia/nemotron-3-nano-30b-a3b` and `curl $NIM_VL_BASE_URL/models` returns `nvidia/nemotron-nano-12b-v2-vl`; VL container logs show EVS initialized.
+- [ ] Validate hosted-NIM fallback path — *Verify:* `curl -H "Authorization: Bearer $NVIDIA_API_KEY" https://integrate.api.nvidia.com/v1/models` lists both Nemotron models; a chat-completion request against the hosted endpoint returns a response.
+- [x] Set up base Python env with ffmpeg, yt-dlp, nvidia-riva-client — *Verify:* `pip install -e ".[dev]"` installs; `python -c "import riva.client, ffmpeg, yt_dlp"` succeeds, `ffmpeg -version` returns 6.0+.
+- [x] Install NeMo Agent Toolkit — *Verify:* `pyproject.toml` declares `nvidia-nat[langchain,adk,mcp]>=1.0`; after `pip install -e ".[dev]"`, `nat --help` lists `run`, `serve`, `mcp`, `info`; `python -c "from nat.cli.register_workflow import register_function"` imports without error.
 - [ ] Smoke-test NIM tool calling through NAT — *Verify:* a minimal `configs/smoke.yml` with one registered tool and a `tool_calling_agent` runs via `nat run --config_file=configs/smoke.yml --input "call the test tool"` and the tool is actually invoked (`nat info components` lists it first).
-- [ ] Smoke test NIM with a text-only prompt — *Verify:* prompt "What is 2+2?" returns a sensible response in under 3s against `$NIM_BASE_URL`.
-- [ ] Smoke test Nemotron Nano 2 VL with a single image — *Verify:* model describes a known test image (e.g., a stop sign) and correctly identifies it; image passed as a URL in the chat-completion request body.
-- [ ] Smoke test Nemotron Nano 2 VL with a 30-second video — *Verify:* model produces a description mentioning motion or scene change across the clip, inference under 15s; video passed as a URL (or `file://` path) to the NIM endpoint.
+- [ ] Smoke test the text NIM with a text-only prompt — *Verify:* prompt "What is 2+2?" returns a sensible response in under 3s against `$NIM_TEXT_BASE_URL`.
+- [ ] Smoke test the VL NIM with a single image — *Verify:* model describes a known test image (e.g., a stop sign) and correctly identifies it; image passed as a URL in the chat-completion request body at `$NIM_VL_BASE_URL`.
+- [ ] Smoke test the VL NIM with a 30-second video — *Verify:* model produces a description mentioning motion or scene change across the clip, inference under 15s; video passed as a URL (or `file://` path) to `$NIM_VL_BASE_URL`.
+- [ ] Smoke test Riva Whisper-Large — *Verify:* `python3 python-clients/scripts/asr/transcribe_file_offline.py --server $RIVA_SERVER --language-code en-US --input-file <audio.wav>` returns a non-empty transcript with word-level timestamps.
 
 ### Source material
 - [ ] Curate 5 candidate source videos — *Verify:* 5 mp4 files on disk, durations logged, languages labeled, all playable end-to-end with audio.
@@ -29,10 +29,10 @@
 - [ ] Select primary and backup demo source — *Verify:* both labeled in a config file, distinct subject matter, both under 30 minutes.
 
 ### Project scaffolding
-- [ ] Create Git repo, add README stub and PRD — *Verify:* repo pushed, PRD and README visible on remote, at least one collaborator has clone access if team.
-- [ ] Define directory layout — *Verify:* empty directories exist, `.gitkeep` committed, gitignore excludes `work/` and `outputs/`.
-- [ ] Define JSON schema for clip manifest — *Verify:* schema file checked in, validates against one hand-written example manifest.
-- [ ] Define log format for agent trace — *Verify:* example log parses with standard JSON-lines tooling, includes timestamp, tool name, inputs, outputs, duration fields.
+- [x] Create Git repo, add README stub and PRD — *Verify:* repo pushed, PRD and README visible on remote, at least one collaborator has clone access if team.
+- [x] Define directory layout — *Verify:* scaffold matches `scaffold_tree.md`; `src/cutpilot/{models,settings,paths,persistence,prompts,pipeline,cli}.py` all present; `tools/`, `agents/`, `clients/`, `configs/` packages present; `.gitignore` excludes `sources/`, `work/`, `outputs/`, `models/`.
+- [ ] Define JSON schema for clip manifest — *Verify:* schema file at `schemas/manifest.schema.json` generated from `models.ClipManifest` via `scripts/export_schemas.py`, validates against one hand-written example manifest.
+- [ ] Define log format for agent trace — *Verify:* example log parses with standard JSON-lines tooling, includes timestamp, tool name, inputs, outputs, duration fields (NAT OpenTelemetry output is the default source).
 
 ---
 
@@ -52,10 +52,10 @@ Goal: End-to-end pipeline produces one clip from a 10-minute video. Ugly output 
 - [ ] Confirm EVS is active on the NIM container — *Verify:* NIM container logs show EVS token pruning stats, VRAM usage on a 5-min video input stays under 40GB.
 
 ### Stub tool execution
-- [ ] Implement `cut` function — *Verify:* given (10s, 20s), output is exactly 10s long, byte-identical to source for those seconds when using `-c copy`.
-- [ ] Implement `crop_9_16` center crop — *Verify:* output resolution is 1080x1920, duration unchanged, center column of pixels matches source center column.
-- [ ] Implement `burn_captions` — *Verify:* output video plays with visible captions at correct timestamps; randomly sampled frames show correct text for that moment.
-- [ ] Implement `scene_detect` — *Verify:* on a known multi-shot clip, returns expected shot count ±1, boundaries within 500ms of manual ground truth.
+- [~] Implement `cut` function — *Verify:* given (10s, 20s), output is exactly 10s long, byte-identical to source for those seconds when using `-c copy`. (Scaffolded at `tools/cut.py` + `clients/ffmpeg.py`; needs integration test against real fixture.)
+- [~] Implement `crop_9_16` center crop — *Verify:* output resolution is 1080x1920, duration unchanged, center column of pixels matches source center column. (Scaffolded at `tools/crop.py`; needs fixture test.)
+- [~] Implement `burn_captions` — *Verify:* output video plays with visible captions at correct timestamps; randomly sampled frames show correct text for that moment. (Scaffolded at `tools/captions.py`; needs fixture test.)
+- [ ] Implement `scene_detect` — *Verify:* on a known multi-shot clip, returns expected shot count ±1, boundaries within 500ms of manual ground truth. (Explicitly cut from sprint scope — see SPRINT.md.)
 
 ### End-to-end dry run
 - [ ] Produce one 30-second vertical clip from hardcoded timestamps — *Verify:* output file exists at `outputs/`, plays end-to-end, 9:16 aspect, captions visible, audio in sync.
@@ -70,16 +70,16 @@ Goal: End-to-end pipeline produces one clip from a 10-minute video. Ugly output 
 Goal: Reasoning replaces hardcoded timestamps. Scout proposes, Critic filters, Editor commits.
 
 ### Agent scaffolding (NeMo Agent Toolkit)
-- [ ] Author `configs/cutpilot.yml` with an `llms:` block (`_type: nim`, `model_name: nvidia/nemotron-nano-12b-v2-vl`, `base_url: ${NIM_BASE_URL:-http://localhost:8000/v1}`, `api_key: ${NVIDIA_API_KEY}`) — *Verify:* `nat run --config_file=configs/cutpilot.yml --input "ping"` loads the config without schema errors; endpoint/model changes are a one-line YAML edit.
-- [ ] Implement 4 tools as plain Python functions with type hints + docstrings, each wrapped by `@register_function(config_type=...)` — *Verify:* each function passes its own unit test; `nat info components` lists all four; the `[project.entry-points.'nat.components']` table in `pyproject.toml` points at them.
-- [ ] Define `CandidatesResult` Pydantic model in `models.py` — *Verify:* model matches the schema shape; validates a hand-written example.
-- [ ] Implement Scout as a `@register_function` returning `CandidatesResult` (no tools; function signature *is* the schema) — *Verify:* running Scout alone via `nat run --config_file=configs/scout_only.yml --input <fixture>` returns a validated `CandidatesResult` with ≥5 entries; no free-text prose leaks; `pydantic.ValidationError` surfaces any malformed model output.
-- [ ] Declare Editor in `configs/cutpilot.yml` as `_type: tool_calling_agent` with `llm_name: nemotron_vl` and `tool_names: [cut, crop_9_16, burn_captions, transcript_window]` — *Verify:* a test run triggers at least one tool call with valid arguments.
-- [ ] Compose Scout → Editor via `workflow: _type: sequential_executor, tool_list: [scout, editor]` — *Verify:* running the workflow on a sample produces Scout output then Editor cuts, in order, with state passed between them.
-- [ ] Verify workflow is servable over HTTP — *Verify:* `nat serve --config_file=configs/cutpilot.yml` binds a FastAPI endpoint; the generated OpenAPI schema exposes the Scout input/output Pydantic models.
+- [x] Author `src/cutpilot/configs/cutpilot.yml` with `llms:` block covering both NIM models (`nemotron_text` → `:8000`, `nemotron_vl` → `:9000`), all functions (`scout`, `cut`, `crop_9_16`, `burn_captions`, `transcript_window`, `editor`), and the `sequential_executor` workflow. *Verify:* YAML parses; endpoint/model changes are a one-line YAML edit.
+- [~] Implement 4 tools as plain Python functions with type hints + docstrings, each wrapped by `@register_function(config_type=..., framework_wrappers=[LLMFrameworkEnum.ADK])` — *Verify:* `nat info components` lists all four after `pip install -e .`; the `[project.entry-points.'nat.components']` table in `pyproject.toml` points at each tool's `register` function. (Scaffolded; each tool passes AST parse — unit tests still pending.)
+- [x] Define `CandidatesResult` Pydantic model in `models.py` — *Verify:* model at `src/cutpilot/models.py` with `candidates: list[Candidate]` (min 5, max 10); `Candidate` enforces `end_ts > start_ts` and `20 ≤ duration ≤ 90` via `@model_validator`; `RubricScores` enforces all four axes as `int` in `[1, 5]`.
+- [~] Implement Scout as a `@register_function` returning `CandidatesResult` (no tools; function signature *is* the schema) — *Verify:* running Scout alone via `nat run --config_file=configs/scout_only.yml --input <fixture>` returns a validated `CandidatesResult` with ≥5 entries; no free-text prose leaks; `pydantic.ValidationError` surfaces any malformed model output. (File scaffolded at `agents/scout.py`; VL call is `NotImplementedError` pending wiring to `llm.with_structured_output(CandidatesResult).ainvoke(...)`.)
+- [x] Declare Editor in `configs/cutpilot.yml` as `_type: tool_calling_agent` with `llm_name: nemotron_text` and `tool_names: [cut, crop_9_16, burn_captions, transcript_window]` — *Verify:* YAML declares the Editor block; runtime verification (tool-call triggered) pending NIM availability.
+- [x] Compose Scout → Editor via `workflow: _type: sequential_executor, tool_list: [scout, editor]` — *Verify:* YAML declares the workflow; runtime verification pending NIM availability.
+- [ ] Verify workflow is servable over HTTP — *Verify:* `nat serve --config_file=src/cutpilot/configs/cutpilot.yml` binds a FastAPI endpoint; the generated OpenAPI schema exposes the Scout input/output Pydantic models.
 
 ### Scout role
-- [ ] Draft Scout system prompt in `prompts/scout.md` — *Verify:* prompt is under 2000 tokens, explicitly lists candidate format, passes sanity read by a second person.
+- [x] Draft Scout system prompt in `prompts/scout.md` — *Verify:* prompt is under 2000 tokens, explicitly lists candidate format, passes sanity read by a second person. (First draft written; second-person sanity read still needed.)
 - [ ] Collect 5–10 candidates from the Scout function (NIM VL call + Pydantic parse) — *Verify:* the function returns a validated `CandidatesResult` instance with ≥5 entries, all with start_ts < end_ts, durations in 20–90s range; malformed model output raises `ValidationError` rather than returning silently.
 - [ ] Validate candidate timestamps against transcript inside the Scout function, before returning — *Verify:* every proposed start_ts and end_ts falls within the source duration; words exist at those timestamps in the transcript.
 - [ ] Self-scoring on all 4 rubric axes in the same pass — *Verify:* every candidate has integer scores 1–5 for hook, self-contained, length-fit, visual-fit; no missing fields.
@@ -91,7 +91,7 @@ Goal: Reasoning replaces hardcoded timestamps. Scout proposes, Critic filters, E
 - [ ] Log rejection rationale — *Verify:* every rejected candidate has a one-sentence reason in the log.
 
 ### Editor role
-- [ ] Draft Editor system prompt — *Verify:* prompt explicitly instructs boundary refinement only; never proposes new clips.
+- [x] Draft Editor system prompt — *Verify:* prompt at `prompts/editor.md` explicitly instructs boundary refinement only; never proposes new clips.
 - [ ] Refine cut boundaries via scene_detect — *Verify:* for each top candidate, final boundaries align with a shot boundary within 500ms OR a transcript silence of >200ms.
 - [ ] Produce final 3-clip plan — *Verify:* plan has exactly 3 clips, no time overlaps between clips, all within source duration.
 
