@@ -13,7 +13,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-    { name = "Sergey Leksikov", "Minje Kim" },
+    { name = "Sergey Leksikov" },
+    { name = "Minje Kim" },
 ]
 keywords = ["video", "agent", "llm", "nemotron", "whisper", "hackathon"]
 classifiers = [
@@ -21,6 +22,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
@@ -42,7 +44,7 @@ dependencies = [
     "openai>=1.51",
 
     # Agent framework — NAT is primary; ADK wrapper available via nvidia-nat[adk]
-    "nvidia-nat[langchain,adk,mcp]>=1.0",  # NeMo Agent Toolkit + ADK wrappers + MCP
+    "nvidia-nat[langchain,adk,mcp]>=1.6",  # NeMo Agent Toolkit + ADK wrappers + MCP
 
     # Media
     "ffmpeg-python>=0.2",        # Python bindings for ffmpeg invocation
@@ -100,7 +102,7 @@ include = [
 # ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -130,7 +132,7 @@ indent-style = "space"
 # Type checking
 # ---------------------------------------------------------------------------
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
