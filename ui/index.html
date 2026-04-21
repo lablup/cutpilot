@@ -5,16 +5,49 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CutPilot</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <script>
       tailwind.config = {
         theme: {
           extend: {
             colors: {
-              accent: {
-                500: "#a855f7",
-                600: "#9333ea",
-                700: "#7e22ce",
+              yred: {
+                500: "#fc3f1d",
+                600: "#e5361a",
+                700: "#c42d16",
               },
+              yyellow: {
+                400: "#ffdb4d",
+                500: "#ffcc00",
+                600: "#f5c400",
+              },
+              ink: {
+                900: "#000000",
+                800: "#1a1a1a",
+                700: "#2b2b2b",
+                500: "#6b6b6b",
+                400: "#8a8a8a",
+                300: "#c4c4c4",
+                200: "#e3e3e3",
+                100: "#eeeeee",
+                50: "#f5f5f7",
+              },
+            },
+            fontFamily: {
+              sans: [
+                "Inter",
+                "YS Text",
+                "-apple-system",
+                "BlinkMacSystemFont",
+                "Helvetica Neue",
+                "sans-serif",
+              ],
+              mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
             },
           },
         },
@@ -23,76 +56,247 @@
     <style>
       html,
       body {
-        background: #0a0a0a;
+        background: #f5f5f7;
+      }
+      body {
+        font-family: "Inter", "YS Text", -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+          sans-serif;
+        font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+        -webkit-font-smoothing: antialiased;
       }
       .mono {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+      }
+      .brand-dot {
+        background: #fc3f1d;
+        box-shadow: 0 0 0 4px rgba(252, 63, 29, 0.12);
+      }
+      .card {
+        background: #ffffff;
+        border: 1px solid #eeeeee;
+        border-radius: 16px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.01em;
+      }
+      .btn-primary {
+        background: #000000;
+        color: #ffffff;
+        transition: background 0.15s ease;
+      }
+      .btn-primary:hover {
+        background: #2b2b2b;
+      }
+      .btn-primary:disabled {
+        background: #eeeeee;
+        color: #8a8a8a;
+        cursor: not-allowed;
+      }
+      .input-field {
+        background: #ffffff;
+        border: 1px solid #e3e3e3;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .input-field:focus {
+        border-color: #000000;
+        box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.06);
+      }
+      .stage-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid #f0f0f0;
+      }
+      .stage-row:last-child {
+        border-bottom: 0;
+      }
+      .stage-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #e3e3e3;
+      }
+      .stage-dot.done {
+        background: #000000;
+      }
+      .stage-dot.active {
+        background: #fc3f1d;
+        box-shadow: 0 0 0 4px rgba(252, 63, 29, 0.15);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 4px rgba(252, 63, 29, 0.15);
+        }
+        50% {
+          box-shadow: 0 0 0 6px rgba(252, 63, 29, 0.08);
+        }
+      }
+      .score-bar {
+        background: #f0f0f0;
+        height: 4px;
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .score-fill {
+        height: 100%;
+        background: #000000;
+        border-radius: 999px;
+      }
+      .progress-track {
+        position: relative;
+        background: #f0f0f0;
+        height: 6px;
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        background: #fc3f1d;
+        border-radius: 999px;
+        transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+        position: relative;
+      }
+      .progress-fill.done {
+        background: #000000;
+      }
+      .progress-fill.failed {
+        background: #c42d16;
+      }
+      .progress-fill.indeterminate::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          rgba(255, 255, 255, 0.55) 50%,
+          transparent 100%
+        );
+        animation: shimmer 1.6s linear infinite;
+      }
+      @keyframes shimmer {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(100%);
+        }
       }
     </style>
   </head>
-  <body class="min-h-screen text-neutral-100">
-    <div class="max-w-5xl mx-auto px-6 py-10">
-      <header class="mb-10">
-        <h1 class="text-3xl font-semibold">CutPilot</h1>
-        <p class="text-neutral-400 mt-1">
-          Long-form video → three vertical 30–60s clips with captions and a reasoning trace.
-        </p>
+  <body class="min-h-screen text-ink-900">
+    <div class="max-w-5xl mx-auto px-6 py-12">
+      <header class="mb-10 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="brand-dot w-3 h-3 rounded-full"></div>
+          <h1 class="text-2xl font-bold tracking-tight">CutPilot</h1>
+        </div>
+        <div class="text-xs mono text-ink-400">v0.1 · hackathon cut</div>
       </header>
 
-      <form id="run-form" class="mb-8">
+      <section class="mb-12">
+        <h2 class="text-4xl sm:text-5xl font-extrabold tracking-tight leading-[1.05] mb-4">
+          Long-form video,<br />
+          <span class="text-ink-400">three vertical clips.</span>
+        </h2>
+        <p class="text-ink-500 text-lg max-w-2xl">
+          Paste a YouTube link or upload a file. CutPilot transcribes, scouts moments, and cuts
+          30–60s vertical highlights with burned-in captions and a reasoning trace.
+        </p>
+      </section>
+
+      <form id="run-form" class="card p-5 mb-8">
+        <label for="source" class="block text-xs font-semibold uppercase tracking-wider text-ink-500 mb-2">
+          Source
+        </label>
         <div class="flex flex-col sm:flex-row gap-2">
           <input
             id="source"
             type="text"
-            placeholder="YouTube URL or local file path on the server"
+            placeholder="https://youtube.com/watch?v=… or /path/to/video.mp4"
             autocomplete="off"
-            class="flex-1 bg-neutral-900 border border-neutral-800 rounded-md px-3 py-2 outline-none focus:border-accent-500 placeholder-neutral-500"
+            class="input-field flex-1 rounded-lg px-4 py-3 text-[15px] outline-none placeholder-ink-400"
           />
           <button
             id="submit-btn"
             type="submit"
-            class="bg-accent-600 hover:bg-accent-500 disabled:bg-neutral-800 disabled:text-neutral-500 text-white font-medium px-5 py-2 rounded-md transition-colors"
+            class="btn-primary font-semibold px-6 py-3 rounded-lg text-[15px]"
           >
-            Start
+            Start →
           </button>
         </div>
-        <div class="mt-3 flex items-center gap-3 text-sm text-neutral-500">
-          <span>or upload a video file</span>
+        <div class="mt-4 pt-4 border-t border-ink-100 flex items-center gap-3 text-sm">
+          <span class="text-ink-500">Or upload</span>
           <input
             id="file"
             type="file"
             accept="video/*"
-            class="text-neutral-300 text-sm file:mr-3 file:border-0 file:rounded-md file:bg-neutral-800 file:hover:bg-neutral-700 file:cursor-pointer file:px-3 file:py-1.5 file:text-neutral-200"
+            class="text-ink-700 text-sm file:mr-3 file:border-0 file:rounded-lg file:bg-yyellow-500 file:hover:bg-yyellow-400 file:cursor-pointer file:px-3 file:py-1.5 file:font-semibold file:text-ink-900 file:transition-colors"
           />
           <button
             id="clear-file-btn"
             type="button"
-            class="hidden text-neutral-400 hover:text-neutral-200 underline"
+            class="hidden text-ink-500 hover:text-ink-900 underline underline-offset-2"
           >
             clear
           </button>
         </div>
-        <p id="form-hint" class="mt-2 text-xs text-neutral-600">
+        <p id="form-hint" class="mt-3 text-xs text-ink-400">
           URL or upload — not both. Uploads win if you've picked a file.
         </p>
       </form>
 
-      <section
-        id="status-panel"
-        class="hidden mb-8 bg-neutral-900 border border-neutral-800 rounded-md p-4"
-      >
-        <div class="flex items-center justify-between">
+      <section id="status-panel" class="hidden card p-5 mb-8">
+        <div class="flex items-center justify-between mb-4">
           <div>
-            <div class="text-xs uppercase tracking-wider text-neutral-500">Run</div>
-            <div id="run-id" class="mono text-sm mt-0.5"></div>
+            <div class="text-xs uppercase tracking-wider text-ink-500 font-semibold">Run</div>
+            <div id="run-id" class="mono text-sm mt-1 text-ink-700"></div>
           </div>
-          <div id="status-badge" class="px-2 py-1 text-xs rounded bg-neutral-800"></div>
+          <div id="status-badge" class="chip"></div>
         </div>
-        <ol id="stage-list" class="mt-4 space-y-1 text-sm text-neutral-400"></ol>
-        <div id="error-box" class="hidden mt-3 p-2 rounded bg-red-950/60 text-red-300 mono text-xs whitespace-pre-wrap"></div>
+        <div class="mb-5">
+          <div class="flex items-center justify-between mb-2">
+            <span id="progress-label" class="text-sm text-ink-700 font-medium">Starting…</span>
+            <span id="progress-percent" class="mono text-xs text-ink-500">0%</span>
+          </div>
+          <div class="progress-track">
+            <div
+              id="progress-fill"
+              class="progress-fill indeterminate"
+              style="width: 0%"
+            ></div>
+          </div>
+          <div class="mt-1 flex justify-between text-[10px] uppercase tracking-wider text-ink-400 mono">
+            <span>download</span>
+            <span>transcribe</span>
+            <span>scout</span>
+            <span>edit</span>
+            <span>done</span>
+          </div>
+        </div>
+        <ol id="stage-list" class="text-[14px]"></ol>
+        <div
+          id="error-box"
+          class="hidden mt-4 p-3 rounded-lg bg-yred-500/5 border border-yred-500/20 text-yred-700 mono text-xs whitespace-pre-wrap"
+        ></div>
       </section>
 
-      <section id="clips" class="hidden grid grid-cols-1 md:grid-cols-3 gap-4"></section>
+      <section id="clips" class="hidden grid grid-cols-1 md:grid-cols-3 gap-5"></section>
+
+      <footer class="mt-16 pt-6 border-t border-ink-100 text-xs text-ink-400 flex items-center justify-between">
+        <div>Whisper · Nemotron Nano 2 VL · NVIDIA NIM</div>
+        <div class="mono">file://review</div>
+      </footer>
     </div>
 
     <script>
@@ -108,6 +312,28 @@
       const stageList = document.getElementById("stage-list");
       const errorBox = document.getElementById("error-box");
       const clipsEl = document.getElementById("clips");
+      const progressFill = document.getElementById("progress-fill");
+      const progressLabel = document.getElementById("progress-label");
+      const progressPercent = document.getElementById("progress-percent");
+
+      const STAGE_LABELS = {
+        pending: "Queued",
+        downloading: "Downloading source",
+        transcribing: "Transcribing audio",
+        scouting: "Scouting moments",
+        editing: "Editing clips",
+        done: "Done",
+        failed: "Failed",
+      };
+      // Progress targets per stage — what % is reached once this stage is active.
+      const STAGE_PROGRESS = {
+        pending: 2,
+        downloading: 15,
+        transcribing: 45,
+        scouting: 70,
+        editing: 90,
+        done: 100,
+      };
 
       fileInput.addEventListener("change", () => {
         clearFileBtn.classList.toggle("hidden", fileInput.files.length === 0);
@@ -127,6 +353,7 @@
         clipsEl.classList.add("hidden");
         clipsEl.innerHTML = "";
         errorBox.classList.add("hidden");
+        updateProgress("pending");
 
         try {
           const state = await submit({ file, source });
@@ -179,18 +406,28 @@
         panel.classList.remove("hidden");
         runIdEl.textContent = state.run_id;
         badge.textContent = state.status;
-        badge.className = `px-2 py-1 text-xs rounded ${badgeClass(state.status)}`;
+        badge.className = `chip ${badgeClass(state.status)}`;
+        updateProgress(state.status);
         const currentIndex = STAGES.indexOf(state.status);
         stageList.innerHTML = STAGES.filter((s) => s !== "pending")
-          .map((stage, i) => {
+          .map((stage) => {
             const stageIdx = STAGES.indexOf(stage);
-            let marker;
-            if (state.status === "failed" && stageIdx > currentIndex) marker = "·";
-            else if (stageIdx < currentIndex) marker = "✓";
-            else if (stageIdx === currentIndex) marker = "▸";
-            else marker = "·";
-            const cls = stageIdx <= currentIndex ? "text-neutral-200" : "text-neutral-600";
-            return `<li class="${cls}"><span class="inline-block w-4">${marker}</span> ${stage}</li>`;
+            let dotClass = "";
+            let textClass = "text-ink-400";
+            if (state.status === "failed" && stageIdx > currentIndex) {
+              dotClass = "";
+              textClass = "text-ink-300";
+            } else if (stageIdx < currentIndex) {
+              dotClass = "done";
+              textClass = "text-ink-700";
+            } else if (stageIdx === currentIndex) {
+              dotClass = state.status === "failed" ? "" : "active";
+              textClass = "text-ink-900 font-semibold";
+            }
+            return `<li class="stage-row">
+              <span class="stage-dot ${dotClass}"></span>
+              <span class="${textClass}">${stage}</span>
+            </li>`;
           })
           .join("");
         if (state.error) {
@@ -203,12 +440,28 @@
         panel.classList.remove("hidden");
         errorBox.textContent = message;
         errorBox.classList.remove("hidden");
+        updateProgress("failed");
+      }
+
+      function updateProgress(status) {
+        const pct = status === "failed" ? 100 : STAGE_PROGRESS[status] ?? 0;
+        progressFill.style.width = `${pct}%`;
+        progressFill.classList.remove("done", "failed", "indeterminate");
+        if (status === "done") {
+          progressFill.classList.add("done");
+        } else if (status === "failed") {
+          progressFill.classList.add("failed");
+        } else {
+          progressFill.classList.add("indeterminate");
+        }
+        progressLabel.textContent = STAGE_LABELS[status] ?? status;
+        progressPercent.textContent = `${pct}%`;
       }
 
       function badgeClass(status) {
-        if (status === "done") return "bg-green-900/60 text-green-300";
-        if (status === "failed") return "bg-red-900/60 text-red-300";
-        return "bg-accent-700/40 text-accent-500";
+        if (status === "done") return "bg-yyellow-500 text-ink-900";
+        if (status === "failed") return "bg-yred-500 text-white";
+        return "bg-ink-900 text-white";
       }
 
       function renderClips(state) {
@@ -216,26 +469,42 @@
         clipsEl.innerHTML = state.manifests
           .map(
             (manifest) => `
-              <article class="bg-neutral-900 border border-neutral-800 rounded-md overflow-hidden">
+              <article class="card overflow-hidden flex flex-col">
                 <video
                   src="/outputs/${state.run_id}/clip_${manifest.clip_index}.mp4"
                   controls
                   class="w-full aspect-[9/16] bg-black"
                 ></video>
-                <div class="p-3 space-y-2">
-                  <div class="font-semibold">${escapeHtml(manifest.hook)}</div>
-                  <div class="text-sm text-neutral-400">${escapeHtml(manifest.rationale)}</div>
-                  <div class="text-xs text-neutral-500 mono">
-                    hook ${manifest.scores.hook} ·
-                    self ${manifest.scores.self_contained} ·
-                    len ${manifest.scores.length_fit} ·
-                    vis ${manifest.scores.visual_fit}
+                <div class="p-4 space-y-3 flex-1 flex flex-col">
+                  <div class="flex items-center gap-2">
+                    <span class="chip bg-ink-50 text-ink-700 mono">#${manifest.clip_index}</span>
+                  </div>
+                  <div class="font-bold text-[15px] leading-snug">${escapeHtml(manifest.hook)}</div>
+                  <div class="text-sm text-ink-500 leading-relaxed flex-1">${escapeHtml(manifest.rationale)}</div>
+                  <div class="pt-3 border-t border-ink-100 space-y-2">
+                    ${renderScore("Hook", manifest.scores.hook)}
+                    ${renderScore("Self-contained", manifest.scores.self_contained)}
+                    ${renderScore("Length", manifest.scores.length_fit)}
+                    ${renderScore("Visual", manifest.scores.visual_fit)}
                   </div>
                 </div>
               </article>
             `,
           )
           .join("");
+      }
+
+      function renderScore(label, value) {
+        const pct = Math.max(0, Math.min(5, Number(value) || 0)) * 20;
+        return `
+          <div>
+            <div class="flex items-center justify-between text-xs mb-1">
+              <span class="text-ink-500">${label}</span>
+              <span class="mono text-ink-700">${value}/5</span>
+            </div>
+            <div class="score-bar"><div class="score-fill" style="width:${pct}%"></div></div>
+          </div>
+        `;
       }
 
       function escapeHtml(value) {
