@@ -11,42 +11,22 @@ can be exercised without Whisper or the Editor.
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
 import structlog
-from google.adk.models.lite_llm import LiteLlm
 
 from cutpilot import paths, prompts
 from cutpilot.agents.scout import scout_core
+from cutpilot.clients.nim import make_vl_llm
 from cutpilot.settings import settings
 
 log = structlog.get_logger()
 
 
-def _make_llm() -> LiteLlm:
-    """Build a bare LiteLlm handle for the VL NIM, matching what NAT's adk plugin yields.
-
-    `extra_body.media_io_kwargs` pushes NIM-side frame sampling to the Nemotron Nano
-    VL's max (128). Without it, NIM defaults to ~8 frames and the model returns
-    near-duplicate descriptions for every candidate because it literally can't see
-    past the title slide.
-    """
-    import litellm
-    litellm.drop_params = True
-    if settings.nvidia_api_key:
-        os.environ["NVIDIA_NIM_API_KEY"] = settings.nvidia_api_key
-    return LiteLlm(
-        f"nvidia_nim/{settings.nim_vl_model}",
-        api_base=settings.nim_vl_base_url,
-        extra_body={"media_io_kwargs": {"video": {"fps": 2, "num_frames": 128}}},
-    )
-
-
 async def _main(video: Path, run_id: str) -> None:
     paths.ensure_dirs(run_id)
-    llm = _make_llm()
+    llm = make_vl_llm()
     log.info(
         "smoke.start",
         video=str(video),
