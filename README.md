@@ -26,7 +26,7 @@ flowchart LR
     VL --> T
     T --> E[Editor agent<br/>picks top 3 · cut or splice plan]
     E --> F[ffmpeg<br/>cut · crop 9:16 · optional captions]
-    F --> O[outputs/&lt;run&gt;/<br/>clip_{1,2,3}.mp4<br/>highlights.mp4<br/>*.manifest.json]
+    F --> O[outputs/&lt;run&gt;/<br/>clip_1.mp4 · clip_2.mp4 · clip_3.mp4<br/>highlights.mp4<br/>*.manifest.json]
 ```
 
 The Editor picks the top 3 by composite rubric (`hook + self_contained + length_fit + visual_fit`), refines boundaries against the transcript, and emits an `EditPlan`. The server dispatches each step (`cut | splice → crop_9_16 → burn_captions?`) via `clients/ffmpeg.py`. A stitched `highlights.mp4` joins all three.
