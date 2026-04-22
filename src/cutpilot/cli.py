@@ -28,10 +28,18 @@ def main(
         "--run-id",
         help="Run identifier — becomes the output subdirectory.",
     ),
+    burn_captions: bool = typer.Option(
+        False,
+        "--burn-captions/--no-burn-captions",
+        help="Burn captions onto the clips as overlays. Off by default; "
+        "caption text is always saved to the manifest regardless.",
+    ),
 ) -> None:
     """Run the full CutPilot pipeline: ingest → transcribe → agents → save."""
-    log.info("cli.run.start", source=source, run_id=run_id)
-    manifests = asyncio.run(run_pipeline(source=source, run_id=run_id))
+    log.info("cli.run.start", source=source, run_id=run_id, burn_captions=burn_captions)
+    manifests = asyncio.run(
+        run_pipeline(source=source, run_id=run_id, burn_captions=burn_captions)
+    )
     log.info("cli.run.done", clips=len(manifests))
     for manifest in manifests:
         typer.echo(f"clip_{manifest.clip_index}: {manifest.output_path}")

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import IO, AsyncIterator
 
 import structlog
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -55,12 +55,14 @@ class RunState(BaseModel):
     status: RunStatus
     source: str
     created_at: datetime
+    burn_captions: bool = False
     error: str | None = None
     manifests: list[ClipManifest] = Field(default_factory=list)
 
 
 class CreateRunRequest(BaseModel):
     source: str = Field(min_length=1)
+    burn_captions: bool = False
 
 
 _RUNS: dict[str, RunState] = {}
@@ -85,11 +87,17 @@ async def create_run(
         run_id=run_id,
         status=RunStatus.PENDING,
         source=request.source,
+        burn_captions=request.burn_captions,
         created_at=datetime.now(UTC),
     )
     _RUNS[run_id] = state
     background_tasks.add_task(_execute_run, run_id)
-    log.info("server.run.submitted", run_id=run_id, source=request.source)
+    log.info(
+        "server.run.submitted",
+        run_id=run_id,
+        source=request.source,
+        burn_captions=request.burn_captions,
+    )
     return state
 
 
@@ -97,6 +105,7 @@ async def create_run(
 async def create_run_upload(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    burn_captions: bool = Form(False),
 ) -> RunState:
     """Multipart alternative to `POST /runs`: save the upload to disk, then
     kick the pipeline off with its local path as `source`."""
@@ -112,6 +121,7 @@ async def create_run_upload(
         run_id=run_id,
         status=RunStatus.PENDING,
         source=str(target),
+        burn_captions=burn_captions,
         created_at=datetime.now(UTC),
     )
     _RUNS[run_id] = state
@@ -121,6 +131,7 @@ async def create_run_upload(
         run_id=run_id,
         filename=original_name,
         target=str(target),
+        burn_captions=burn_captions,
     )
     return state
 
@@ -165,6 +176,7 @@ async def _execute_run(run_id: str) -> None:
             source=state.source,
             run_id=run_id,
             on_stage=on_stage,
+            burn_captions=state.burn_captions,
         )
     except Exception as exc:  # noqa: BLE001 — any failure should land in state
         log.exception("server.run.failed", run_id=run_id)

@@ -251,6 +251,15 @@
             clear
           </button>
         </div>
+        <label class="mt-3 flex items-center gap-2 text-sm text-ink-700 cursor-pointer select-none">
+          <input
+            id="burn-captions"
+            type="checkbox"
+            class="w-4 h-4 rounded border-ink-300 text-yred-500 focus:ring-yred-500 focus:ring-offset-0"
+          />
+          <span>Burn captions onto clips</span>
+          <span class="text-xs text-ink-400">— slower; off by default</span>
+        </label>
         <p id="form-hint" class="mt-3 text-xs text-ink-400">
           URL or upload — not both. Uploads win if you've picked a file.
         </p>
@@ -306,6 +315,7 @@
       const sourceInput = document.getElementById("source");
       const fileInput = document.getElementById("file");
       const clearFileBtn = document.getElementById("clear-file-btn");
+      const burnCaptionsInput = document.getElementById("burn-captions");
       const panel = document.getElementById("status-panel");
       const runIdEl = document.getElementById("run-id");
       const badge = document.getElementById("status-badge");
@@ -347,6 +357,7 @@
         event.preventDefault();
         const file = fileInput.files[0];
         const source = sourceInput.value.trim();
+        const burnCaptions = burnCaptionsInput.checked;
         if (!file && !source) return;
 
         submitBtn.disabled = true;
@@ -356,7 +367,7 @@
         updateProgress("pending");
 
         try {
-          const state = await submit({ file, source });
+          const state = await submit({ file, source, burnCaptions });
           showPanel(state);
           poll(state.run_id).catch((err) => showError(String(err)));
         } catch (err) {
@@ -365,10 +376,11 @@
         }
       });
 
-      async function submit({ file, source }) {
+      async function submit({ file, source, burnCaptions }) {
         if (file) {
           const formData = new FormData();
           formData.append("file", file);
+          formData.append("burn_captions", burnCaptions ? "true" : "false");
           const res = await fetch("/runs/upload", { method: "POST", body: formData });
           if (!res.ok) throw new Error(`POST /runs/upload ${res.status}`);
           return res.json();
@@ -376,7 +388,7 @@
         const res = await fetch("/runs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source }),
+          body: JSON.stringify({ source, burn_captions: burnCaptions }),
         });
         if (!res.ok) throw new Error(`POST /runs ${res.status}`);
         return res.json();
