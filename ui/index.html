@@ -524,6 +524,15 @@
         div.textContent = value ?? "";
         return div.innerHTML;
       }
+
+      // Optional `?run_id=<id>` pre-loads an existing run from the backing
+      // server. Lets you share a review URL or screenshot a completed run.
+      const preloadedRunId = new URLSearchParams(window.location.search).get("run_id");
+      if (preloadedRunId) {
+        panel.classList.remove("hidden");
+        runIdEl.textContent = preloadedRunId;
+        poll(preloadedRunId).catch((err) => showError(String(err)));
+      }
     </script>
   </body>
 </html>
