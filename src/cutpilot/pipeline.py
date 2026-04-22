@@ -1,17 +1,19 @@
-"""Non-agent pipeline orchestrator: ingest → transcribe → Scout → materialize → save.
+"""Pipeline orchestrator: ingest → transcribe → Scout → Editor → stitch → save.
 
-This file holds no agent logic. Agent work is delegated via `scout_core`, and
-materialization goes through `clients/ffmpeg.py`. Manifest persistence happens
-at the tail.
+Agent work is delegated: Scout (`agents/scout.py`) picks candidates via the
+VL+text NIMs; Editor (`agents/editor.py`) runs an OpenAI-tool-calling loop
+on the text NIM to refine boundaries and materialize the 3 clips via
+`cut → crop_9_16 → burn_captions`. ffmpeg subprocess work is owned by
+`clients/ffmpeg.py`; this module only wires stages together.
 
 An optional `on_stage` callback lets a frontend (the FastAPI server) observe
 stage transitions without coupling the pipeline to HTTP concerns. The callback
 receives a literal stage name — see `PipelineStage` below for the closed set.
 
-For the hackathon cut we bypass the full NAT `sequential_executor` and do
-deterministic top-3 selection + ffmpeg materialization in Python; the YAML
-workflow at `configs/cutpilot.yml` stays in place as the `nat run` entry point
-for when the Editor agent loop is known-working end-to-end.
+The declarative NAT `sequential_executor` workflow at `configs/cutpilot.yml`
+is the `nat run` entrypoint and wires Scout → Editor too, but the CLI drives
+this Python path because it needs `list[ClipManifest]` out (not a text blob)
+and accepts a `(run_id, source_path)` pair (not a single string input).
 """
 
 from __future__ import annotations
@@ -23,14 +25,12 @@ from typing import Literal, TypeAlias
 import structlog
 
 from cutpilot import paths, persistence, prompts
+from cutpilot.agents.editor import editor_core
 from cutpilot.agents.scout import scout_core, scout_text_core, scout_vl_sliding
-from cutpilot.clients.ffmpeg import prepare_video_for_vl
-from cutpilot import paths as paths_mod  # noqa: F401 — re-used via paths above
 from cutpilot.clients.ffmpeg import (
     concat_reencode,
-    crop_9_16_center,
-    cut_reencode,
     extract_audio,
+    prepare_video_for_vl,
 )
 from cutpilot.clients.nim import make_vl_llm
 from cutpilot.clients.whisper import transcribe
@@ -56,8 +56,15 @@ async def run_pipeline(
     source: str,
     run_id: str,
     on_stage: StageCallback = None,
+    *,
+    burn_captions: bool = False,
 ) -> list[ClipManifest]:
-    """End-to-end pipeline. `source` is either a local file path or an http(s) URL."""
+    """End-to-end pipeline. `source` is either a local file path or an http(s) URL.
+
+    `burn_captions` is off by default — caption text is always persisted in the
+    manifest, but pixel-burning onto the video only happens when explicitly
+    opted in (CLI `--burn-captions`, UI checkbox).
+    """
     paths.ensure_dirs(run_id)
 
     # 0. Ingest — resolve the CLI argument into a concrete local file
@@ -87,6 +94,7 @@ async def run_pipeline(
         transcript=transcript,
         run_id=run_id,
         on_stage=on_stage,
+        burn_captions=burn_captions,
     )
     log.info("pipeline.done", clips=len(manifests))
 
@@ -130,15 +138,15 @@ async def _run_nat_workflow(
     transcript: Transcript,
     run_id: str,
     on_stage: StageCallback = None,
+    *,
+    burn_captions: bool = False,
 ) -> list[ClipManifest]:
-    """Scout → deterministic top-3 → ffmpeg materialization.
+    """Scout (VL sliding + text NIM) → Editor (tool-calling) → stitch.
 
-    The full NAT `sequential_executor` is declared in `configs/cutpilot.yml` and
-    usable via `nat run` directly; we take a shorter Python-driven path here
-    because (a) sequential_executor only returns the last agent's text blob
-    (not `list[ClipManifest]`), and (b) it accepts a single string input, so
-    passing `(run_id, source_path)` to Scout needs a JSON-dispatcher layer we
-    don't yet need.
+    Every content-bearing decision is AI-made: VL NIM scores the 15 windows,
+    text NIM picks 5–10 candidates, Editor (text NIM + tool calls) refines
+    boundaries via `transcript_window` and invokes `cut → crop_9_16 →
+    burn_captions` for each clip. The final stitch is deterministic.
     """
     # Three-NIM architecture (matches PRD):
     #   1. Whisper → transcript (already done)
@@ -191,44 +199,26 @@ async def _run_nat_workflow(
     log.info("pipeline.scout_done", n_candidates=len(candidates.candidates))
 
     _emit(on_stage, "editing")
-    top3 = sorted(candidates.candidates, key=lambda c: c.scores.composite, reverse=True)[:3]
-    for rank, cand in enumerate(top3, start=1):
-        log.info(
-            "pipeline.top3_selected",
-            rank=rank,
-            start_ts=cand.start_ts,
-            end_ts=cand.end_ts,
-            duration=cand.end_ts - cand.start_ts,
-            composite=cand.scores.composite,
-            hook=cand.hook[:80],
-        )
-
-    manifests: list[ClipManifest] = []
-    for idx, cand in enumerate(top3, start=1):
-        output_path = paths.clip_path(run_id, idx)
-        await _materialize_clip(source, cand.start_ts, cand.end_ts, output_path)
-        size_mb = output_path.stat().st_size / (1024 * 1024) if output_path.exists() else 0.0
+    # Editor agent — AI-driven materialization. Picks top-3, refines boundaries
+    # via transcript_window, and calls cut → crop_9_16 → burn_captions per clip.
+    manifests = await editor_core(
+        candidates=candidates,
+        source=source,
+        transcript=transcript,
+        run_id=run_id,
+        system_prompt=prompts.load("editor"),
+        burn_captions=burn_captions,
+    )
+    for m in manifests:
         log.info(
             "pipeline.clip_materialized",
-            clip_index=idx,
-            start_ts=cand.start_ts,
-            end_ts=cand.end_ts,
-            composite=cand.scores.composite,
-            output=str(output_path),
-            size_mb=round(size_mb, 2),
-        )
-        manifests.append(
-            ClipManifest(
-                clip_index=idx,
-                source_path=source,
-                start_ts=cand.start_ts,
-                end_ts=cand.end_ts,
-                hook=cand.hook,
-                rationale=cand.rationale,
-                scores=cand.scores,
-                caption_text="",  # captions require a transcript — wire when burn_captions lands
-                output_path=output_path,
-            )
+            clip_index=m.clip_index,
+            start_ts=m.start_ts,
+            end_ts=m.end_ts,
+            composite=m.scores.composite,
+            output=str(m.output_path),
+            size_mb=round(m.output_path.stat().st_size / (1024 * 1024), 2)
+                    if m.output_path.exists() else 0.0,
         )
 
     # Stitch: concatenate the 3 clips in chronological order into one highlight
@@ -249,11 +239,3 @@ async def _run_nat_workflow(
     return manifests
 
 
-async def _materialize_clip(source: Path, start_ts: float, end_ts: float, output: Path) -> None:
-    """Cut + crop to 9:16 in a single chain. Re-encode path only (frame-accurate)."""
-    cut_tmp = output.with_suffix(".cut.mp4")
-    try:
-        await cut_reencode(source, start_ts, end_ts, cut_tmp)
-        await crop_9_16_center(cut_tmp, output)
-    finally:
-        cut_tmp.unlink(missing_ok=True)

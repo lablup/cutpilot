@@ -1,44 +1,51 @@
 # CutPilot
 
-Agentic long-video to short-clip generator. Takes a 5–90 minute source video (podcast, lecture, interview, keynote) and produces three 30–60 second vertical clips with burned-in captions and a reasoning trace explaining why each moment was selected.
+Agentic long-video → short-clip generator. Drop in a 5–90 minute podcast, lecture, interview, or keynote and get back three 30–60 second vertical clips plus a stitched highlights reel — each with burned-in captions, a hook, scored rationale, and the full reasoning trace that picked the moment.
 
 Built for NVIDIA Nemotron Developer Days Seoul 2026 — Track A (Creative Agentic Systems).
 
 ## How it works
 
-Two steps, both backed by **Nemotron Nano 2 VL** served by **NVIDIA NIM**, orchestrated by the **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`) via a single YAML workflow (`configs/cutpilot.yml`):
+A three-NIM pipeline orchestrated through the **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`). Every model call hits a live NVIDIA NIM over its OpenAI-compatible `/v1` interface — no local weights, no LLM mocks:
 
-- **Scout** reads the full video and transcript in one pass, proposes 5–10 candidate moments, and self-scores each on four axes (hook strength, self-containedness, length fit, visual fit). Implemented as a NAT `@register_function` whose return type is the Pydantic schema.
-- **Editor** (NAT `tool_calling_agent`) picks the top three, validates timestamps against the transcript, and calls a small set of tools (`cut`, `crop_9_16`, `burn_captions`, `transcript_window`) to materialize the clips.
+1. **Whisper-Large ASR NIM** transcribes the source in 5-minute chunks with word-level timestamps and stitches them back into a single `Transcript`.
+2. **Nemotron Nano 12B V2 VL NIM** runs **in parallel over sliding 90-second windows** covering the full video. Each window returns a 1–5 visual score and a one-sentence visual hook. Sliding scan avoids the pattern-collapse a single VL pass exhibits on long talks (everything becomes "a woman on stage").
+3. **Nemotron-3 Nano text NIM** sees the full transcript + the per-window VL observations and proposes 5–10 candidate clips via `client.beta.chat.completions.parse(response_format=CandidatesResult)` — Pydantic strict-mode JSON, not free text.
 
-Perception is handled by **Whisper large-v3** (word-level timestamps) running alongside the NIM container on a single **NVIDIA Brev** H100 Launchable. Hosted NIM at `build.nvidia.com` (`NVIDIA_API_KEY`) is the documented fallback.
+The top 3 by composite score (`hook + self_contained + length_fit + visual_fit`) are materialized: `cut_reencode → crop_9_16_center → burn_captions` via `clients/ffmpeg.py`. A stitched `highlights.mp4` joins all three.
 
-Output is three `.mp4` files + per-clip JSON manifests, surfaced through a single-file HTML review UI that shows before/after, rationale, rubric scores, and the full agent reasoning trace.
+Scout is a NAT `@register_function` (`cutpilot.agents.scout`); the eight ffmpeg operations (`cut`, `crop_9_16`, `burn_captions`, `transcript_window`, `splice`, `merge`, `save`, `probe`) are registered NAT tools available to the declarative `tool_calling_agent` Editor defined in `configs/cutpilot.yml`. The CLI drives the simpler functional path (`scout_vl_sliding → scout_text_core → top-3 → materialize`) directly, because `sequential_executor` returns a text blob and takes a single string input — not the `(run_id, source_path) → list[ClipManifest]` contract the CLI needs.
+
+Output: three `.mp4`s, per-clip JSON manifests, a stitched `highlights.mp4`, and a single-file HTML review UI with before/after, rationale, rubric scores, and reasoning trace.
 
 ## Status
 
-End-to-end wired. `cutpilot <source>` runs ingest → Whisper → Scout (live NIM VL) → top-3 → ffmpeg → manifest and writes clips under `outputs/<run>/`. `cutpilot-serve` exposes the same pipeline over HTTP for the review UI. Two gaps remain: `schemas/manifest.schema.json` (and its generator `scripts/export_schemas.py`) is not yet written, and the declarative NAT `sequential_executor` path in `configs/cutpilot.yml` is reachable via `nat run` but is not what the CLI actually drives — see [CLAUDE.md](CLAUDE.md) for why.
+Finalized on `main`. End-to-end verified against the live NIMs on a 43-minute GTC Healthcare talk: 9-chunk Whisper transcription → 15-window parallel VL scan → 6-candidate text scout → 3 content-grounded clips (e.g. *"What if AI could design life-saving drugs in minutes?"*, *"What if robots could perform surgery with human-level precision?"*) + 42 MB `highlights.mp4`, all in ~3 minutes of wall-clock.
 
-Reference documents:
+Test coverage (all against live dependencies, no LLM mocks):
 
-- **[PRD.md](PRD.md)** — full product requirements
-- **[SPRINT.md](SPRINT.md)** — 12-hour execution cut (wins over PRD on scope conflicts)
-- **[TASKS.md](TASKS.md)** — task breakdown with verifiable outcomes
-- **[CLAUDE.md](CLAUDE.md)** — guidance for Claude Code in this repo
+- **87 unit tests** — models, parsers, prompt rendering, sliding-window math, URL gating. <3 s.
+- **16 integration tests** — real ffmpeg subprocess + live VL / text / Whisper NIMs on a 120 s slice of real content. ~25 s.
+- **1 e2e test** — full `run_pipeline` on the 43-min GTC video. Opt-in via `pytest -m e2e`, ~3 min.
 
 ## Requirements
 
-- Python 3.11+ (dev env is pinned to 3.13 via `.python-version`; `ruff` and `mypy` both target `py313`)
+- Python 3.11+ (dev env pinned to 3.13 via `.python-version`; `ruff` and `mypy` both target `py313`)
 - `ffmpeg` 6.0+ on `PATH`
-- An **NVIDIA Brev** H100 Launchable (≥70 GB VRAM), provisioned via the Brev CLI
-- NVIDIA NIM container `nvcr.io/nim/nvidia/nemotron-nano-12b-v2-vl:<tag>` running on the Brev instance (pulled with `NGC_API_KEY`), or hosted NIM at `build.nvidia.com` with `NVIDIA_API_KEY` as fallback
-- faster-whisper large-v3 weights available locally on the Brev instance
+- Three NVIDIA NIM endpoints reachable over HTTPS (configured in `.env`):
+  - **Whisper-Large** (OpenAI-compat `/v1/audio/transcriptions`)
+  - **Nemotron Nano 12B V2 VL** (OpenAI-compat `/v1/chat/completions` with video input)
+  - **Nemotron-3 Nano text** (OpenAI-compat `/v1/chat/completions`)
+
+  Hosted at `build.nvidia.com` with `NVIDIA_API_KEY`, or self-hosted on an **NVIDIA Brev** H100 Launchable (≥70 GB VRAM) with containers from `nvcr.io/nim/...` pulled via `NGC_API_KEY`. See [.env.example](.env.example) for the full contract.
 
 ## Install
 
 ```bash
 pip install -e ".[dev]"
 ```
+
+Then copy `.env.example` → `.env` and fill in the three NIM endpoints.
 
 ## Run
 
@@ -48,7 +55,7 @@ cutpilot https://youtu.be/<id>                 # yt-dlp handles URL ingest
 cutpilot /path/to/video.mp4 --run-id demo      # custom run id (= output subdir)
 ```
 
-Clips and per-clip manifests land under `outputs/<run>/`; open `ui/index.html` directly (`file://`) to review.
+Clips, per-clip manifests, and `highlights.mp4` land under `outputs/<run>/`; open `ui/index.html` directly (`file://`) to review.
 
 To serve the review UI over HTTP — and accept multipart uploads from the browser:
 
@@ -65,16 +72,17 @@ nat run --config_file=src/cutpilot/configs/cutpilot.yml --input <source>
 ## Development
 
 ```bash
-pytest                          # full suite (unit + integration)
-pytest -m "not integration"     # unit tests only (fast, no live NIM needed)
-pytest -m integration           # live-NIM / ffmpeg suites — auto-skip when endpoints are down
-ruff check . && ruff format .   # lint + format
-mypy src                        # strict type check
+pytest                                          # unit + integration (live NIMs auto-skip when down)
+pytest -m "not integration and not e2e"         # unit only — fast, hermetic
+pytest -m integration                           # real ffmpeg + live NIM (≈25 s)
+pytest -m e2e                                   # full 43-min pipeline on the GTC video (≈3 min)
+ruff check . && ruff format .                   # lint + format
+mypy src                                        # strict type check
 ```
 
 ## Scope
 
-**In:** one source file (`.mp4`/`.mov`/`.mkv`) or YouTube URL, English audio, single primary speaker, 3 vertical clips with burned-in captions, center-crop framing.
+**In:** one source file (`.mp4`/`.mov`/`.mkv`) or YouTube URL, English audio, single primary speaker, 3 vertical clips with burned-in captions, center-crop framing, stitched highlights reel.
 
 **Out for the sprint** (deferred to post-hackathon): smart crop with face tracking, scene-detection tool, multi-language output, word-level caption highlighting, Korean-language sources, multi-speaker handling, social platform publishing, batch processing.
 

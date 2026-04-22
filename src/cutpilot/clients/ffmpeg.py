@@ -8,7 +8,26 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from PIL import Image, ImageDraw, ImageFont
+
 from cutpilot.models import ProbeInfo
+
+# ---------------------------------------------------------------------------
+# Caption rendering (Pillow → PNGs composited via `overlay` filter).
+# Chosen over `subtitles=` / `drawtext` because both need libass / libfreetype,
+# neither of which ship in Homebrew's default ffmpeg bottle. `overlay` is a
+# core filter that's always available, so this path works on any ffmpeg build.
+# ---------------------------------------------------------------------------
+
+CAPTION_FONT_CANDIDATES = [
+    Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    Path("/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"),
+]
+CAPTION_FONT_SIZE = 56
+CAPTION_MAX_TEXT_WIDTH = 900  # for 1080-wide video, leaves ~90 px side margins
+CAPTION_BOTTOM_PAD = 220      # px above bottom edge — clears TikTok / Shorts UI
+CAPTION_BG_ALPHA = 210        # black pill bg opacity (0-255)
 
 
 async def _run(args: list[str]) -> None:
@@ -171,18 +190,139 @@ async def crop_9_16_center(source: Path, output: Path) -> None:
     ])
 
 
-async def burn_captions(source: Path, subtitle_file: Path, output: Path) -> None:
-    """Burn subtitles from an .srt file into the video. Full-segment captions."""
+async def burn_captions(
+    source: Path,
+    segments: list[tuple[float, float, str]],
+    output: Path,
+    *,
+    work_dir: Path | None = None,
+) -> None:
+    """Composite captions onto `source` as Pillow-rendered PNG overlays.
+
+    `segments` are `(start_s, end_s, text)` tuples on the video's local
+    timeline (zeroed at source's start). Each segment becomes one PNG input,
+    chained through the `overlay` filter with `enable='between(t,s,e)'`.
+
+    Requires only the core `overlay` filter — no libass or libfreetype.
+    """
+    if not segments:
+        raise ValueError("burn_captions called with no segments — caller should skip")
+
     output.parent.mkdir(parents=True, exist_ok=True)
-    # ffmpeg subtitles filter requires the path to be shell-escaped inside the filter string
-    escaped = str(subtitle_file).replace(":", r"\:").replace("'", r"\'")
-    await _run([
-        "-i", str(source),
-        "-vf", f"subtitles='{escaped}'",
+    font_path = _caption_font_path()
+    scratch = work_dir if work_dir is not None else output.parent / f".cap_{output.stem}"
+    scratch.mkdir(parents=True, exist_ok=True)
+
+    png_paths: list[Path] = []
+    for i, (_, _, text) in enumerate(segments):
+        png_path = scratch / f"cap_{i:04d}.png"
+        await asyncio.to_thread(
+            _render_caption_png,
+            text, png_path, font_path, CAPTION_FONT_SIZE, CAPTION_MAX_TEXT_WIDTH,
+        )
+        png_paths.append(png_path)
+
+    # Build the filter_complex chain: video → overlay cap0 → overlay cap1 → …
+    chain_parts: list[str] = []
+    prev_label = "[0:v]"
+    for i, (start, end, _) in enumerate(segments):
+        input_label = f"[{i + 1}:v]"
+        out_label = "[vout]" if i == len(segments) - 1 else f"[v{i}]"
+        chain_parts.append(
+            f"{prev_label}{input_label}overlay="
+            f"x=(main_w-overlay_w)/2:y=main_h-overlay_h-{CAPTION_BOTTOM_PAD}"
+            f":enable='between(t,{start:.3f},{end:.3f})'"
+            f"{out_label}"
+        )
+        prev_label = out_label
+    filter_complex = ";".join(chain_parts)
+
+    args: list[str] = ["-i", str(source)]
+    for p in png_paths:
+        args += ["-i", str(p)]
+    args += [
+        "-filter_complex", filter_complex,
+        "-map", "[vout]",
+        "-map", "0:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "copy",
         str(output),
-    ])
+    ]
+    await _run(args)
+
+
+def _caption_font_path() -> str:
+    for candidate in CAPTION_FONT_CANDIDATES:
+        if candidate.exists():
+            return str(candidate)
+    raise RuntimeError(
+        "No caption font found; expected one of: "
+        + ", ".join(str(c) for c in CAPTION_FONT_CANDIDATES)
+    )
+
+
+def _render_caption_png(
+    text: str,
+    out_path: Path,
+    font_path: str,
+    font_size: int,
+    max_text_width: int,
+) -> None:
+    """Render one caption segment as a transparent-bg PNG with a rounded black
+    pill behind white text. Word-wraps to fit within `max_text_width`."""
+    font = ImageFont.truetype(font_path, font_size)
+    lines = _wrap_lines(text, font, max_text_width)
+
+    ascent, descent = font.getmetrics()
+    line_h = ascent + descent
+    line_gap = int(line_h * 0.15)
+    pad_x, pad_y = 40, 22
+
+    widths: list[int] = []
+    for line in lines:
+        left, _, right, _ = font.getbbox(line)
+        widths.append(right - left)
+    content_w = max(widths) if widths else 0
+    content_h = (
+        len(lines) * line_h + max(0, len(lines) - 1) * line_gap if lines else 0
+    )
+    img_w = content_w + 2 * pad_x
+    img_h = content_h + 2 * pad_y
+
+    img = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle(
+        (0, 0, img_w, img_h),
+        radius=min(img_h // 2, 32),
+        fill=(0, 0, 0, CAPTION_BG_ALPHA),
+    )
+
+    y = pad_y
+    for line, w in zip(lines, widths, strict=True):
+        left, _, _, _ = font.getbbox(line)
+        x = (img_w - w) // 2 - left
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+        y += line_h + line_gap
+    img.save(out_path, format="PNG")
+
+
+def _wrap_lines(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    """Greedy word-wrap: accumulate words until the next one would overflow."""
+    words = text.split()
+    if not words:
+        return []
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        test = f"{current} {word}"
+        left, _, right, _ = font.getbbox(test)
+        if right - left > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = test
+    lines.append(current)
+    return lines
 
 
 # ---------------------------------------------------------------------------
