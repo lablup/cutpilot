@@ -86,6 +86,8 @@ nat info components            # lists every @register_function tool + Scout
 
 ## Review UI
 
+![CutPilot review UI](docs/screenshots/ui_home.png)
+
 Single-file HTML at `ui/index.html` — Tailwind via CDN, Inter + JetBrains Mono, dark-on-light palette with the brand red (`#fc3f1d`) as the live-state accent.
 
 Each run renders three video players side-by-side. Per clip:
