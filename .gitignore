@@ -43,3 +43,8 @@ Thumbs.db
 # dev
 private/
 deliverables/
+
+# pitch/slide generation scripts (not part of runtime)
+scripts/make_pitch_deck.py
+scripts/make_title_card.py
+scripts/add_speaker_notes.py
