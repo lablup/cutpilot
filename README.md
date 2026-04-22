@@ -10,7 +10,7 @@ Built for NVIDIA Nemotron Developer Days Seoul 2026 — Track A (Creative Agenti
 
 ## How it works
 
-A three-NIM pipeline orchestrated through the **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`). Every model call hits a live NVIDIA NIM over its OpenAI-compatible `/v1` interface — no local weights, no LLM mocks:
+A three-NIM pipeline orchestrated in Python (`src/cutpilot/pipeline.py`). Every model call hits a live NVIDIA NIM over its OpenAI-compatible `/v1` interface — no local weights, no LLM mocks. Each pipeline component is also registered as an **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`) function and discoverable via `nat info components` — see [NAT integration](#nat-integration) for what is and isn't wired through NAT.
 
 1. **Whisper-Large ASR NIM** transcribes the source in 5-minute chunks with word-level timestamps and stitches them back into a single `Transcript`.
 2. **Nemotron Nano 12B V2 VL NIM** runs in parallel over sliding 90-second windows covering the full video. Each window returns a 1–5 visual score and a one-sentence visual hook. Sliding scan avoids the pattern-collapse a single VL pass exhibits on long talks.
@@ -29,7 +29,7 @@ flowchart LR
     F --> O[outputs/&lt;run&gt;/<br/>clip_1.mp4 · clip_2.mp4 · clip_3.mp4<br/>highlights.mp4<br/>*.manifest.json]
 ```
 
-The Editor picks the top 3 by composite rubric (`hook + self_contained + length_fit + visual_fit`), refines boundaries against the transcript, and emits an `EditPlan`. The server dispatches each step (`cut | splice → crop_9_16 → burn_captions?`) via `clients/ffmpeg.py`. A stitched `highlights.mp4` joins all three.
+The Editor sorts candidates by composite rubric (`hook + self_contained + length_fit + visual_fit`), keeps the top 3, refines boundaries against the transcript via a single structured-output NIM call, and emits an `EditPlan`. It then dispatches each step (`cut | splice → crop_9_16 → burn_captions?`) via `clients/ffmpeg.py`. A stitched `highlights.mp4` joins all three.
 
 ## Status
 
@@ -77,12 +77,13 @@ To serve the review UI over HTTP and accept uploads from the browser:
 cutpilot-serve                 # defaults to http://127.0.0.1:8080
 ```
 
-The declarative NAT workflow at `src/cutpilot/configs/cutpilot.yml` can be exercised directly:
+All 9 pipeline components are also exposed as NAT functions and listed by:
 
 ```bash
-nat run --config_file=src/cutpilot/configs/cutpilot.yml --input <source>
 nat info components            # lists every @register_function tool + Scout
 ```
+
+A declarative composition lives at `src/cutpilot/configs/cutpilot.yml`. It is not the runtime path the CLI/server uses — see [NAT integration](#nat-integration) for the full split.
 
 ## Review UI
 
@@ -114,41 +115,71 @@ Three layers stacked vertically. Top runs the flow, middle decides the content, 
 |-------------------------|----------------------------------------------------------------|--------------------------------------------------------------------------------------------|
 | **Pipeline (Python)**   | Deterministic orchestration — resolve source, transcribe, delegate to agents, stitch | `src/cutpilot/pipeline.py` · `src/cutpilot/cli.py` · `src/cutpilot/server.py`              |
 | **Agents (LLM)**        | Scout picks candidate moments; Editor writes the cut plan       | `src/cutpilot/agents/scout.py` · `src/cutpilot/agents/editor.py`                           |
-| **Tools (ffmpeg + transcript)** | Small callable units the agents invoke; the only code that shells out to ffmpeg | `src/cutpilot/tools/` (cut · crop_9_16 · burn_captions · transcript_window · splice · merge · save · probe) · `src/cutpilot/clients/ffmpeg.py` |
+| **Tools (ffmpeg + transcript)** | Per-step Python callables exposed as NAT functions; in production the Editor invokes `clients/ffmpeg.py` directly. Only code that shells out to ffmpeg. | `src/cutpilot/tools/` (cut · crop_9_16 · burn_captions · transcript_window · splice · merge · save · probe) · `src/cutpilot/clients/ffmpeg.py` |
 | **NIM clients**         | OpenAI-compat callers for Whisper, VL, Text — SSoT per endpoint | `src/cutpilot/clients/whisper.py` · `src/cutpilot/clients/nim.py` · `src/cutpilot/clients/youtube.py` |
-| **Workflow config**     | YAML declaring `llms:` / `functions:` / `workflow:` for `nat run` | `src/cutpilot/configs/cutpilot.yml`                                                        |
+| **NAT workflow config** | YAML composing the registered functions into a declarative `nat`-format workflow (companion artifact, not the production runtime) | `src/cutpilot/configs/cutpilot.yml`                                                        |
 | **System prompts**      | Scout + Editor system prompts, loaded at runtime                | `prompts/scout.md` · `prompts/editor.md`                                                   |
 | **Data models**         | Every Pydantic type that crosses an agent boundary or hits disk | `src/cutpilot/models.py`                                                                   |
 | **Review UI**           | Static HTML + JS; reads manifests, renders players + trace      | `ui/index.html`                                                                            |
 
-## How the NAT agent loop works
+## How the pipeline runs
 
-Three pieces do the work:
-
-1. **Tool registration.** Every tool is a plain Python async function decorated with `@register_function`, plus an entry in `pyproject.toml`'s `[project.entry-points."nat.components"]` table. Running `nat info components` lists the lot. Entry-points are read *at install time*, so add a new tool and you must `pip install -e .` before `nat` sees it.
-2. **Agent declaration.** The workflow YAML (`src/cutpilot/configs/cutpilot.yml`) declares a `tool_calling_agent` bound to a text LLM with a `tool_names` list — for CutPilot, that's the Editor using the four materialization tools (`cut`, `crop_9_16`, `burn_captions`, `transcript_window`). NAT constructs the loop from that spec; there's no agent class to subclass.
-3. **The loop.** NAT feeds the agent its system prompt, the user task, and a tool manifest generated from each tool's type-annotated signature. The agent emits JSON tool calls; NAT dispatches each call to the registered Python function; the return value goes back to the agent as the tool result. The loop runs until the agent emits a final answer.
+`pipeline.run` in `src/cutpilot/pipeline.py` is the single entrypoint for both the CLI and the FastAPI server. It calls each stage directly — Scout's two passes (VL sliding scan + text-NIM moment selection) and the Editor (structured-output `EditPlan`) are NIM calls dispatched as plain Python coroutines, with ffmpeg invocations sandwiched in. There is no agent loop in production: every LLM-driven decision is a single `client.beta.chat.completions.parse(response_format=…)` call returning Pydantic strict-mode JSON, dispatched by `pipeline.py`.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as Editor Agent<br/>(Nemotron Text)
-    participant NAT as NAT Runtime
-    participant T as Registered Tools
-    Note over A,T: Loop runs until the agent returns a final answer
-    NAT->>A: system prompt + user task + tool manifest
-    A->>NAT: tool call: cut(source, start, end)
-    NAT->>T: dispatch to cutpilot.tools.cut
-    T-->>NAT: path to cut mp4
-    NAT-->>A: tool result
-    A->>NAT: tool call: crop_9_16(cut_path)
-    NAT->>T: dispatch
-    T-->>NAT: path to 1080x1920 mp4
-    NAT-->>A: tool result
-    A->>NAT: final answer (EditPlan JSON)
+    participant U as cutpilot CLI<br/>or FastAPI
+    participant P as pipeline.run
+    participant W as Whisper NIM
+    participant V as VL NIM<br/>(15× parallel)
+    participant T as Text NIM
+    participant E as editor.run
+    participant F as ffmpeg
+
+    U->>P: source path
+    P->>W: 5-min audio chunks
+    W-->>P: word-level Transcript
+    P->>V: 15 parallel 90 s windows
+    V-->>P: per-window visual_score + visual_hook
+    P->>T: full transcript + window observations
+    T-->>P: 5–10 candidates (parse → CandidatesResult)
+    P->>E: top-3 candidates + transcript
+    E->>T: parse(response_format=EditPlan)
+    T-->>E: per-clip cut|splice plan + boundaries
+    E-->>P: EditPlan
+    loop for each of 3 clips
+        P->>F: cut → crop_9_16 → burn_captions?
+        F-->>P: clip_N.mp4 + manifest
+    end
+    P->>F: concat-demuxer
+    F-->>P: highlights.mp4
+    P-->>U: list[ClipManifest]
 ```
 
-Current CutPilot wrinkle: the CLI drives a simpler Python path (`scout_vl_sliding → scout_text_core → top-3 → editor_core → ffmpeg`) instead of `nat run`, because NAT's `sequential_executor` returns a text blob and takes a single string input — it can't deliver `list[ClipManifest]` back to the caller. `nat run --config_file=src/cutpilot/configs/cutpilot.yml --input <source>` still works as the canonical declarative view.
+Three things to call out about the design:
+
+1. **Sliding VL scan, not single-shot.** A single VL pass over a long talk pattern-collapses to one generic caption. Splitting into N=15 uniformly-spaced 90 s windows gives the VL model enough variation to actually score — see `scout_vl_sliding` in `src/cutpilot/agents/scout.py`.
+2. **Text NIM is the actual moment-picker.** It receives the full transcript *and* the per-window VL summaries, so its choices are grounded in both audio content and visual evidence. See `scout_text_core`.
+3. **Editor uses structured output, not tool-calling.** The deployed NIMs lack `--enable-auto-tool-choice --tool-call-parser`, so the Editor emits a single `EditPlan` (one Pydantic object: per-clip strategy + boundaries + caption flag) instead of an OpenAI tool-call loop. The server then dispatches each plan step to ffmpeg. See `src/cutpilot/agents/editor.py`.
+
+## NAT integration
+
+Every component is exposed as an NVIDIA NeMo Agent Toolkit function. What's wired and what isn't:
+
+**What is real ✓**
+
+- 9 components registered with `@register_function` + `[project.entry-points."nat.components"]` in `pyproject.toml`. All 9 are visible to `nat info components`: `cutpilot_scout`, `cutpilot_cut`, `cutpilot_crop_9_16`, `cutpilot_burn_captions`, `cutpilot_transcript_window`, `cutpilot_splice`, `cutpilot_merge`, `cutpilot_save`, `cutpilot_probe`.
+- A declarative workflow at `src/cutpilot/configs/cutpilot.yml` composes them into a `sequential_executor` (`scout → editor`) over two NIM-typed LLM providers.
+- Scout uses NAT's ADK framework wrapper (`framework_wrappers=[LLMFrameworkEnum.ADK]`) and `LLMRef` for provider injection.
+
+**What is *not* wired through NAT ✗**
+
+- The production runtime (`pipeline.py`, used by both `cutpilot` CLI and `cutpilot-serve`) calls the same components as plain Python coroutines. It does not import `WorkflowBuilder` or load the YAML — it can't, because `sequential_executor` returns a text string and the FastAPI server needs typed `list[ClipManifest]` to render the UI.
+- The Editor runs structured-output `parse(response_format=EditPlan)` directly, not NAT's `tool_calling_agent` (deployed NIMs lack the tool-call parser).
+- `nat run --config_file=src/cutpilot/configs/cutpilot.yml --input <source>` currently fails workflow build with `NameError: name 'CandidatesResult' is not defined` — interaction between `from __future__ import annotations` in `scout.py` and NAT's `FunctionInfo.from_fn` introspection. Tracked as a deferred fix.
+
+In short: CutPilot ships as a NAT-discoverable component library that NAT's CLI can introspect, plus a Python orchestrator that consumes those same components directly. Bringing the full production runtime under `WorkflowBuilder` is a deferred follow-up.
 
 ## Development
 
