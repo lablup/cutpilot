@@ -13,7 +13,7 @@ Built for NVIDIA Nemotron Developer Days Seoul 2026 — Track A (Creative Agenti
 A three-NIM pipeline orchestrated through the **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`). Every model call hits a live NVIDIA NIM over its OpenAI-compatible `/v1` interface — no local weights, no LLM mocks:
 
 1. **Whisper-Large ASR NIM** transcribes the source in 5-minute chunks with word-level timestamps and stitches them back into a single `Transcript`.
-2. **Nemotron Nano 12B V2 VL NIM** runs in parallel over sliding 90-second windows covering the full video. Each window returns a 1–5 visual score and a one-sentence visual hook. Sliding scan avoids the pattern-collapse a single VL pass exhibits on long talks (everything becomes *"a woman on stage"*).
+2. **Nemotron Nano 12B V2 VL NIM** runs in parallel over sliding 90-second windows covering the full video. Each window returns a 1–5 visual score and a one-sentence visual hook. Sliding scan avoids the pattern-collapse a single VL pass exhibits on long talks.
 3. **Nemotron-3 Nano text NIM** sees the full transcript + the per-window VL observations and proposes 5–10 candidate clips via `client.beta.chat.completions.parse(response_format=CandidatesResult)` — Pydantic strict-mode JSON, not free text.
 
 ```mermaid
