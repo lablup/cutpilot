@@ -4,6 +4,10 @@ Agentic long-video → short-clip generator. Drop in a 5–90 minute podcast, le
 
 Built for NVIDIA Nemotron Developer Days Seoul 2026 — Track A (Creative Agentic Systems).
 
+## Demo
+
+[![CutPilot demo](https://img.youtube.com/vi/TyfDE2Gj9BQ/maxresdefault.jpg)](https://youtu.be/TyfDE2Gj9BQ)
+
 ## How it works
 
 A three-NIM pipeline orchestrated through the **NVIDIA NeMo Agent Toolkit** (`nvidia-nat`). Every model call hits a live NVIDIA NIM over its OpenAI-compatible `/v1` interface — no local weights, no LLM mocks:
