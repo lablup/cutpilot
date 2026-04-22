@@ -280,7 +280,7 @@ async def scout_vl_sliding(
                     ],
                     response_format=_WindowAnalysisPayload,
                     temperature=0.2,
-                    max_tokens=300,
+                    max_tokens=512,
                     extra_body={"media_io_kwargs":
                                 {"video": {"fps": 2, "num_frames": 32}}},
                 )
